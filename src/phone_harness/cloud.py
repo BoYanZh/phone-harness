@@ -426,7 +426,8 @@ def _session_record(session, selector=None, label=None):
 def _store_session(record, make_attached=True):
     """Remember a session. `make_attached` updates the terminal fallback.
     Every remembered session stays addressable by `--session`, so a later
-    start does not forget the previous phone."""
+    start does not forget the previous phone. Storing one clears a previous
+    "gone" mark: the user has a phone again."""
     state = _load_state()
     sessions = _known_sessions(state)
     sessions[record["sid"]] = record
@@ -435,6 +436,7 @@ def _store_session(record, make_attached=True):
         state["session"] = record
     if make_attached and record.get("profile"):
         state["profile_id"] = record["profile"]
+    state.pop("gone", None)
     _save_state(state)
     if record["link"]["kind"] == "adb":
         ensure_connected(record, quiet=True)
@@ -469,7 +471,13 @@ def _pull_pinned(pin):
     return _store_session(_session_record(session), make_attached=False)
 
 
-def _detach(sid=None):
+def _detach(sid=None, gone=False):
+    """Forget a remembered session. `gone=True` means the service lost the
+    attached one (expired, crashed) rather than the user ending it: that
+    session is remembered under "gone" so the helpers refuse to run instead
+    of quietly falling through to the phone on this machine. See lost().
+    A plain detach (the user's `cloud stop`) clears that too. Other
+    remembered sessions stay addressable by `--session`."""
     state = _load_state()
     sessions = _known_sessions(state)
     current = state.get("session") if isinstance(state.get("session"), dict) else None
@@ -478,6 +486,7 @@ def _detach(sid=None):
         sids = [targeted["sid"]] if targeted and targeted.get("sid") else []
     else:
         sids = [sid]
+    removed_attached = None
     for target in sids:
         rec = _as_linked(sessions.get(target))
         if rec is None and current and current.get("sid") == target:
@@ -490,13 +499,42 @@ def _detach(sid=None):
                 pass
         sessions.pop(target, None)
         if current and current.get("sid") == target:
+            if gone:
+                removed_attached = rec or current
             state.pop("session", None)
             current = None
     if sessions:
         state["sessions"] = sessions
     else:
         state.pop("sessions", None)
+    if gone and removed_attached:
+        state["gone"] = {"sid": removed_attached.get("sid"),
+                         "platform": removed_attached.get("platform"),
+                         "at": time.time()}
+    if not gone:
+        state.pop("gone", None)
     _save_state(state)
+
+
+def lost():
+    """A session that was attached and is no longer usable, or None.
+
+    Either the service said it was gone (`gone` in the state file) or its
+    expiry passed while it was still attached. Read by transport.connect() so
+    the default-platform fallback never lands on a different phone than the
+    one the agent was driving. No network, never raises."""
+    try:
+        state = _load_state()
+    except Exception:
+        return None
+    gone = state.get("gone")
+    if gone:
+        return gone
+    sess = state.get("session") or {}
+    if sess.get("expires_at") and time.time() >= sess["expires_at"]:
+        return {"sid": sess.get("sid"), "platform": sess.get("platform"),
+                "at": sess["expires_at"]}
+    return None
 
 
 # --- small things ------------------------------------------------------------
@@ -1087,8 +1125,10 @@ def _status(args):
                                               if running else " — `phone-harness cloud start`"))
         return 0
     if live is None:
-        print(f"session     {sess['sid']} is gone; detaching")
-        _detach()
+        print(f"session     {sess['sid']} is gone; detaching. Scripts will refuse to run "
+              "until `phone-harness cloud start` rents another (or a local platform is "
+              "named explicitly)")
+        _detach(gone=True)
         return 0
     state = ("closing — saving the phone"
              if live["state"] == "closing" and _keeps_state(live)

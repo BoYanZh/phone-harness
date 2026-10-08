@@ -188,6 +188,14 @@ phone-harness cloud open                     # the dashboard: the user takes the
 - **`cloud phone` is the saved Android only** (`GET /me/profile`).
   `cloud phone reset --yes` wipes that phone's stored state: apps, logins,
   and data. The CLI has no iPhone reset; that is the operator's.
+- **A cloud session that dies does not hand you a different phone.** When
+  the service loses the attached session (expired, crashed), the next script
+  raises naming it instead of running on the phone on this desk, which is a
+  different device with the user's own apps. `phone-harness cloud start`
+  rents another and clears that (name the iPhone with its id, label, or
+  `ios` when that is the only one); so does the user's `cloud stop`. Only an
+  explicit `PHONE_HARNESS_PLATFORM=ios` or `android` drives a local phone
+  while that stands.
 - The adb address the CLI shows is not a secret; the unlock code is. Do not
   look for it, print it, or ask the user for it.
 
