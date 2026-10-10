@@ -203,8 +203,7 @@ list from `GET <control url>/ops` (`remote.py`). `supports(op)` is that list.
 `send` of an op the host did not list raises `Unsupported` before the POST
 (`this cloud phone cannot '…'`). The op names and the shapes below are the
 client vocabulary in `transport.py`. Result shapes are what this repo
-documents or decodes. The phone-host source was not available while this was
-written; anything that lives only there is marked unverified.
+documents or decodes.
 
 | Op | Arguments | Result this client uses |
 | --- | --- | --- |
@@ -232,18 +231,13 @@ written; anything that lives only there is marked unverified.
 | `tree` | | `[node]` where the device has one |
 | `raw` | backend-specific | host result |
 
-Trust `GET /ops` when the host's list is shorter than this table. A live
-cloud iPhone was previously reported to reject `tree`, `nav.back`, and
-`apps.current`; that report was not re-checked against phone-host.
+Trust `GET /ops` when the host's list is shorter than this table.
 
 - **Coordinates are `screen.bounds`.** `tap(x, y)`, `find_window()`,
   `send("screen.require")`, and OCR centres all use that space:
-  `{x, y, w, h, id}`. `screenshot()` is the PNG from `screen.capture`, which
-  is not always the same pixel size as `bounds`. One phone reported
-  `{x:0, y:0, w:750, h:1334, id:"iphone"}` while its PNGs were 576×1024.
-  That pair is a reported observation, not re-checked against phone-host.
-  Use `tap_image_point()` for a PNG pixel once `screen_info()` returns
-  `img_px`. Otherwise tap an OCR centre.
+  `{x, y, w, h, id}`. A point read off the PNG goes through
+  `tap_image_point()` once `screen_info()` returns `img_px`. Otherwise tap
+  an OCR centre.
 - **`screen_info()`, `image_point()`, and `tap_image_point()` measure the
   PNG** so a point you read off a screenshot can become a tap. If
   `screen_info()` raises `ModuleNotFoundError: No module named 'Quartz'`,
@@ -254,27 +248,19 @@ cloud iPhone was previously reported to reject `tree`, `nav.back`, and
   ("screen_info() no longer needs macOS") is the change that reads the PNG
   header instead of importing Quartz; until `screen_info()` returns `img_px`
   off a Mac, treat the Quartz error as those three helpers only.
-- **Type into a field that already has focus.** `type_text` sends
-  `input.text`. Tap the field and let the keyboard appear first; text sent
-  before focus goes nowhere, so check with `ocr()` afterwards. The default
-  is a paste (`keystrokes` false), which arrives as written. `keystrokes=True`
-  asks for real key events. Whether the SE delivers those through a paired
-  Bluetooth keyboard and the other phones through the on-screen keyboard is
-  **unverified**: the phone-host tree was not readable from here.
-- **Screenshot, act, then check.** Do one thing, then `ocr()` or
-  `screenshot()`, then the next thing. Do not `wait(n)` for a screen to load.
-  The client gives `screen.capture` 60s, `apps.launch` / `apps.list` 90s, and
-  `input.text` the scaled timeout above. How long the host waits for the
-  screen to settle after a tap is **unverified** in phone-host.
-- **Errors from the control host, as this client handles them.** HTTP 400
-  with `unsupported: true` raises `Unsupported` (retrying will not help).
-  HTTP 404 raises `RuntimeError`: the session is gone or the grant expired.
-  Any other HTTP status, including 409, raises `RuntimeError` with the host's
-  `error` string. Codes `busy` and `device_unavailable` on that 409 are
-  **unverified** here; phone-host was not available to confirm them. The
-  session API's own `409` `device_unavailable` and `409` `profile_running`
-  happen on `cloud start`, before any op, and are described under **Cloud
-  phones**.
+- **`type_text()` types into the focused field.** Tap the field first. Text
+  sent before the field has focus goes nowhere, so check with `ocr()`
+  afterwards.
+- **Act, then look.** One action, then `ocr()` or `screenshot()`, then the
+  next. Do not `wait(n)` for a screen to load. The client allows
+  `screen.capture` 60s, `apps.launch` and `apps.list` 90s, and `input.text`
+  the timeout in the table.
+- **Errors the client raises.** HTTP 400 with `unsupported: true` raises
+  `Unsupported` (retrying will not help). HTTP 404 raises `RuntimeError`:
+  the session is gone or the grant expired. Any other HTTP status raises
+  `RuntimeError` with the host's `error` string. Create-time
+  `device_unavailable`, `profile_running`, and `phones_busy` happen on
+  `cloud start`, before any op, and are described under **Cloud phones**.
 - **`ui()`, `back()`, and `current_app()` raise Unsupported** when the host
   does not list `tree`, `nav.back`, and `apps.current`. `home()` is the Home
   button. `shell()` is Unsupported.
@@ -283,10 +269,6 @@ cloud iPhone was previously reported to reject `tree`, `nav.back`, and
   `home()` and tap the icon. `tap_icon()` in
   `agent-workspace/agent_helpers.py` aims 35 points above the label for the
   mirroring window, so measure this phone's icon yourself.
-- **An Apple Account password has to be typed on the phone.** Hand over with
-  `phone-harness cloud open` and wait until the user says they are done.
-  Remote typing being refused on that screen is carried forward from earlier
-  notes; it was **not re-verified** in phone-host.
 
 ## Android
 
