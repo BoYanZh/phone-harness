@@ -105,14 +105,16 @@ PY
 ## Cloud phones
 
 There are two things. A **phone** is a row in the account catalog (`GET /me`
-→ `available`): a label, a platform, an id, and whether it is the default or
-a temporary phone. A **session** is one of those phones rented right now.
+→ `available`): a label, a platform, an id, and whether it is a temporary
+phone. The service keeps no default phone; a preference is the chooser's. A **session** is one of those phones rented right now.
 `cloud ls` prints one row per catalog phone and writes any live session on
 that row (`*` is the session this process targets). A running session that
 matches no row is still listed.
 
-`cloud start` with no name rents the account default and sends no `platform`
-or `kind`; the service applies `GET /me` → `default`. A name is a catalog id
+`cloud start` with no name starts this machine's `cloud.phone` setting
+(`config set cloud.phone "Desk phone"`) when one is set; otherwise it sends
+no `platform` or `kind` and gets the service's rule for an unnamed start
+(`GET /me` → `unnamed`): a temporary Android. A name is a catalog id
 or label, or `ios` / `android` when only one entry has that platform. Several
 matches print the catalog and stop (a terminal may ask which one). The CLI
 turns the chosen row into `platform` and `kind`, plus `device_id` for an
@@ -126,7 +128,7 @@ An adb link is the Android section. A control link (`{url, token}`) is
 ```bash
 phone-harness cloud                          # signed in? which session is attached? time left?
 phone-harness cloud ls                       # catalog, live sessions inlined; --json for the rows
-phone-harness cloud start                    # account default; opens the live view
+phone-harness cloud start                    # cloud.phone if set, else a temporary Android; opens the live view
 phone-harness cloud start ios --for 15m      # one iPhone, fifteen minutes
 phone-harness cloud start "Temporary phone" --for 90s
 phone-harness --session SID <<'PY'           # this process only; or PHONE_HARNESS_SESSION

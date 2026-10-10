@@ -695,15 +695,19 @@ def _catalog(me):
     return list(available) if isinstance(available, list) else []
 
 
-def _default_entry(catalog):
-    defaults = [e for e in catalog if e.get("default")]
-    return defaults[0] if len(defaults) == 1 else None
+def _unnamed(me):
+    """What the service gives a start that names nothing: its own rule
+    (`GET /me` → `unnamed`), a temporary Android. Never a preference."""
+    rule = me.get("unnamed") if isinstance(me, dict) else None
+    if isinstance(rule, dict) and rule.get("platform"):
+        return {**rule, "temporary": bool(rule.get("temporary", True))}
+    return {"platform": "android", "kind": "emulator", "temporary": True}
 
 
 def _entry_selector(entry):
     """What a later `cloud start` of the same phone matches against."""
     if entry is None:
-        return "default"
+        return "unnamed"
     if entry.get("id"):
         return "id:" + entry["id"]
     if entry.get("temporary"):
@@ -731,7 +735,7 @@ def _format_catalog(catalog):
         return "  (nothing in this account's catalog)"
     lines = []
     for e in catalog:
-        note = "default" if e.get("default") else "temporary" if e.get("temporary") else ""
+        note = "temporary" if e.get("temporary") else ""
         lines.append(f"  {e.get('label') or 'phone':<18} {e.get('platform') or '':<8} "
                      f"{e.get('id') or '-':<14} {e.get('state') or '-':<12} {note}".rstrip())
     return "\n".join(lines)
@@ -758,14 +762,14 @@ def _create_body(entry, timeout):
 
 
 def _needs_adb(entry, me):
-    """An emulator link is adb. A device link is not. A bare start follows
-    the account default's kind."""
-    chosen = entry if entry is not None else _default_entry(_catalog(me)) or me.get("default") or {}
+    """An emulator link is adb. A device link is not. A bare start gets
+    what the service gives an unnamed start."""
+    chosen = entry if entry is not None else _unnamed(me)
     return chosen.get("kind") != "device"
 
 
-def _starting_line(entry, catalog):
-    shown = entry if entry is not None else _default_entry(catalog)
+def _starting_line(entry, me):
+    shown = entry if entry is not None else _unnamed(me)
     if shown and shown.get("platform") == "ios":
         label = shown.get("label") or shown.get("id") or ""
         return f"Starting your iPhone{', ' + label if label else ''}…"
@@ -801,7 +805,7 @@ def _saved_holder(entry, me):
     """The profile id this start will occupy, when it is the saved Android.
     None for a temporary phone, an iPhone, or a bare start whose default is
     not that profile."""
-    shown = entry if entry is not None else _default_entry(_catalog(me))
+    shown = entry if entry is not None else _unnamed(me)
     profile = (me.get("profile") or {}).get("id")
     if not shown or not profile or shown.get("temporary") or shown.get("platform") == "ios":
         return None
@@ -887,7 +891,10 @@ def _start(args):
         sys.exit(CLI_USAGE)
     if len(args) > 1:
         sys.exit(CLI_USAGE)
-    phone = args[0] if args else None
+    # No name: this machine's own preference (`config set cloud.phone ...`),
+    # else whatever the service gives an unnamed start (a temporary Android).
+    configured = str(config.get("cloud.phone") or "").strip()
+    phone = args[0] if args else (configured or None)
     if for_opt and minutes_opt:
         sys.exit("Pass --for or --minutes, not both.")
     cap = int(config.get("cloud.max_minutes"))
@@ -907,7 +914,9 @@ def _start(args):
     if phone:
         matches = _match_catalog(catalog, phone)
         if not matches:
-            sys.exit(f"No phone named {phone!r} is in this account's catalog.\n"
+            where = (" (from `config set cloud.phone`; clear it with `config unset cloud.phone`)"
+                     if not args else "")
+            sys.exit(f"No phone named {phone!r} is in this account's catalog{where}.\n"
                      f"{_format_catalog(catalog)}")
         if len(matches) > 1:
             print(_format_catalog(matches))
@@ -952,7 +961,7 @@ def _start(args):
     body = _create_body(entry, timeout)
     label = (entry or {}).get("label")
     request_key = uuid.uuid4().hex
-    print(_starting_line(entry, catalog))
+    print(_starting_line(entry, me))
     try:
         created = _api("POST", "/sessions", body, headers={"Idempotency-Key": request_key})
     except CloudError as e:
@@ -1142,7 +1151,6 @@ def _ls_rows(me, sessions):
             "platform": entry.get("platform"),
             "id": entry.get("id"),
             "state": entry.get("state"),
-            "default": bool(entry.get("default")),
             "temporary": bool(entry.get("temporary")),
             "session": session_blob(match) if match else None,
             "targeted": bool(match and match.get("id") == mine),
@@ -1155,7 +1163,6 @@ def _ls_rows(me, sessions):
             "platform": s.get("platform"),
             "id": None,
             "state": s.get("state"),
-            "default": False,
             "temporary": not s.get("profile") and _link_kind(s) != "control",
             "session": session_blob(s),
             "targeted": s.get("id") == mine,
@@ -1181,7 +1188,7 @@ def _ls(args):
           f"{'SESSION':<14} LEFT")
     for row in rows:
         sess = row.get("session") or {}
-        note = "default" if row.get("default") else "temporary" if row.get("temporary") else ""
+        note = "temporary" if row.get("temporary") else ""
         print(f"{'*' if row.get('targeted') else ' '} {row.get('label') or '':<18} "
               f"{row.get('platform') or '':<8} {row.get('id') or '-':<14} "
               f"{row.get('state') or '-':<12} {note:<10} "
@@ -1328,7 +1335,9 @@ CLI_USAGE = """Usage:
   phone-harness cloud start [PHONE] [--for DURATION] [--no-watch]
                                                PHONE is a catalog id or label, or ios/android
                                                when only one entry has that platform. No PHONE
-                                               starts the account default. --for is 90s, 15m, or
+                                               starts cloud.phone (config set cloud.phone NAME),
+                                               else a temporary Android, the service's rule for an
+                                               unnamed start. --for is 90s, 15m, or
                                                minutes (default 15, cap cloud.max_minutes).
                                                --minutes N is the same thing, deprecated.
                                                Opens the live view (cloud.watch)

@@ -63,7 +63,7 @@ guide; [helpers.py](src/phone_harness/helpers.py) is the full list.
 ```bash
 phone-harness cloud login            # once: approve in your browser
 phone-harness cloud ls               # phones on the account, and any live session
-phone-harness cloud start            # the account default, for 15 min (--for 90s, 15m, or minutes)
+phone-harness cloud start            # cloud.phone if set, else a temporary Android; 15 min (--for 90s, 15m)
 phone-harness cloud start ios        # the account's iPhone, when only one is listed
 phone-harness <<'PY'
 print(screenshot())
@@ -73,7 +73,8 @@ phone-harness cloud stop             # billing stops; a saved Android is written
 
 `cloud ls` is the catalog (`GET /me` → `available`): each phone's label,
 platform, and id, with a live session on that row. `cloud start` with no name
-asks for the account default. A name is a catalog id or label, or `ios` /
+starts this machine's `cloud.phone` setting if one is set, else what the
+service gives an unnamed start, a temporary Android. A name is a catalog id or label, or `ios` /
 `android` when only one entry has that platform. A [cloud Android](https://phone-harness.com/cloud)
 is reached over adb, so every helper works on it unchanged. A cloud iPhone has
 no shell: the helpers POST ops over HTTPS, OCR runs on the host, and driving
