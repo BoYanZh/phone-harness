@@ -16,7 +16,7 @@ of you.
 | Phone | How it is reached | Eyes | Hands | Read |
 | --- | --- | --- | --- | --- |
 | **Cloud Android** — rented from Phone Harness Cloud, the user's own saved phone | `phone-harness cloud start` connects it; nothing to export | accessibility tree (exact), Vision OCR fallback on a Mac | adb `input` | Working method, then **Cloud phones** and **Android** |
-| **Cloud iPhone** — the account's own iPhone; only with `--iphone` | `phone-harness cloud start --iphone` connects it; nothing to export | server-side OCR (`source: "pixels"`), from any OS | ops over HTTPS | Working method, then **Cloud iPhone** |
+| **Cloud iPhone** — an iOS entry in the account catalog | `phone-harness cloud start` with its id, label, or `ios` when that is the only one | server-side OCR (`source: "pixels"`), from any OS | ops over HTTPS | Working method, then **Cloud iPhone** |
 | **Android on the desk** — USB or paired Wi-Fi | the harness finds it | accessibility tree (exact), Vision OCR fallback on a Mac | adb `input` | Working method, then **Android** |
 | **iPhone** — through the Mac's iPhone Mirroring window | the user connects it | screenshots + Vision OCR | HID-level CGEvents into the window | Working method, then **iPhone** |
 
@@ -104,93 +104,146 @@ PY
 
 ## Cloud phones
 
-`phone-harness cloud start` rents the user's own Android phone from Phone
-Harness Cloud and connects to it; from then on every script drives that phone
-with nothing exported, exactly as the Android section describes. It is the
-same phone each time: apps, logins and normally the exact screen are kept
-between sessions.
+There are two things. A **phone** is a row in the account catalog (`GET /me`
+→ `available`): a label, a platform, an id, and whether it is the default or
+a temporary phone. A **session** is one of those phones rented right now.
+`cloud ls` prints one row per catalog phone and writes any live session on
+that row (`*` is the session this process targets). A running session that
+matches no row is still listed.
+
+`cloud start` with no name rents the account default and sends no `platform`
+or `kind`; the service applies `GET /me` → `default`. A name is a catalog id
+or label, or `ios` / `android` when only one entry has that platform. Several
+matches print the catalog and stop (a terminal may ask which one). The CLI
+turns the chosen row into `platform` and `kind`, plus `device_id` for an
+iPhone or `profile_id` for the saved Android. The temporary row sends neither
+id.
+
+What the helpers do next follows the session's link, not the platform name.
+An adb link is the Android section. A control link (`{url, token}`) is
+**Cloud iPhone**.
 
 ```bash
-phone-harness cloud                     # signed in? a phone attached? minutes left?
-phone-harness cloud start               # ~15s; opens the live view; safe to run twice (reattaches)
-phone-harness cloud start --minutes 25  # default 15, cap 30 (config: cloud.minutes, cloud.max_minutes)
-phone-harness cloud start --timeout 90s # same length as seconds, or 15m; not with --minutes
-phone-harness cloud start --temp        # a throwaway phone that keeps nothing
-phone-harness cloud ls                  # every running session (* = attached)
-phone-harness cloud phone               # the saved phone: stored / running / saving
-phone-harness cloud watch               # reopen the read-only live view (--print to share the link)
-phone-harness cloud open                # the dashboard: the user takes the controls (their sign-in)
-phone-harness cloud stop                # ends billing and saves the phone; returns at once
+phone-harness cloud                          # signed in? which session is attached? time left?
+phone-harness cloud ls                       # catalog, live sessions inlined; --json for the rows
+phone-harness cloud start                    # account default; opens the live view
+phone-harness cloud start ios --for 15m      # one iPhone, fifteen minutes
+phone-harness cloud start "Temporary phone" --for 90s
+phone-harness --session SID <<'PY'           # this process only; or PHONE_HARNESS_SESSION
+print(screen_info())
+PY
+phone-harness cloud stop                     # ends billing; returns at once
+phone-harness cloud phone                    # the saved Android's stored state
+phone-harness cloud watch                    # reopen the read-only live view (--print to share)
+phone-harness cloud open                     # the dashboard: the user takes the controls
 ```
 
+- **Pin a session when more than one can be up.** `--session SID` or
+  `PHONE_HARNESS_SESSION` selects one phone for this process, and every
+  `cloud` command and helper honours it. With neither, a person at a terminal
+  gets the attached session: the last `cloud start`, or `cloud use SID`.
+  `cloud use` rewrites that shared fallback. Parallel agents should pass
+  `--session` and leave `cloud use` alone, or they will steal the fallback
+  from each other.
 - **It bills by the minute while it is up.** Start it once and keep it for the
-  whole conversation — a stop and a restart between two requests wastes more
-  than it saves. Stop it when the user is done, and say that you did.
+  whole conversation. Stop it when the user is done, and say that you did.
+  `--for` is the length: `90s`, `15m` / `15min`, or a bare number of minutes.
+  Default 15, cap 30 (`cloud.minutes`, `cloud.max_minutes`).
 - **Stop before the deadline; a session cannot be extended.** One that simply
-  runs out keeps the phone's data but not its running state. The harness warns
-  on stderr under two minutes; `phone-harness cloud` shows the time left. If
-  the task needs longer, stop and start again — the phone comes back where it
-  was in about 15 seconds. `cloud stop` returns at once; the save finishes on
-  its own, and a `cloud start` during it waits.
-- **A session the user started is theirs.** `cloud start` attaches to a phone
-  that is already running instead of starting another; leave it running unless
-  they ask you to stop it.
+  runs out keeps a saved Android's data but not its running state. The harness
+  warns on stderr under two minutes; `phone-harness cloud` shows the time left.
+  `cloud stop` returns at once. Stopping an adb phone that has a profile saves
+  it; `cloud start` of that phone waits out a save still in progress. A
+  control link keeps its data on the phone, so there is nothing to wait for.
+- **Already running.** Starting a phone this machine already holds for the
+  same catalog choice reuses that session. If the service says it is held
+  elsewhere (`409` `profile_running`), the message names the SID and says to
+  attach with `--session SID`. Do that; do not start a second one. `409`
+  `device_unavailable` means the phone is granted but not on its host.
+  `409` `session_limit` names how many sessions are in use. `503`
+  `phones_busy` includes `Retry-After`. `403` `account_blocked` means rentals
+  are blocked; a `403` about credit or balance means add credit. A `400` that
+  names no such phone reprints the catalog.
 - **`Not signed in`** means the user runs `phone-harness cloud login` and
-  approves it in a browser. Relay that; you cannot do it for them. A user
-  without an account is pointed at phone-harness.com by the CLI itself.
-- **Watching versus controlling.** `cloud start` opens the phone's live view
-  in the user's browser so they can watch you work; it is read-only and
-  `cloud watch` reopens it. When the user wants to drive themselves — a
-  password, a 2FA prompt, or just to take over — run `phone-harness cloud open`
-  (the dashboard, behind their own sign-in) and wait for them to say they are
-  done before you touch the phone again.
-- **A cloud iPhone is the next section.** `phone-harness cloud start --iphone`
-  starts the account's iPhone; plain `cloud start` stays Android. Session
-  length, billing, `ls`, `watch`, `use`, and `stop` are the commands above.
-  How the helpers see and touch that phone is **Cloud iPhone**.
-- The connection is handled for you, including reconnecting after a drop. The
-  adb address the CLI shows is not a secret; the unlock code is, and you never
-  need it — do not look for it, print it, or ask the user for it.
+  approves it in a browser. Relay that; you cannot do it for them.
+- **Watching versus controlling.** `cloud start` opens the live view so the
+  user can watch. `cloud watch` reopens it. For a password, a 2FA prompt, or
+  the user taking over, run `phone-harness cloud open` and wait until they say
+  they are done.
+- **`cloud phone` is the saved Android only** (`GET /me/profile`).
+  `cloud phone reset --yes` wipes that phone's stored state: apps, logins,
+  and data. The CLI has no iPhone reset; that is the operator's.
+- The adb address the CLI shows is not a secret; the unlock code is. Do not
+  look for it, print it, or ask the user for it.
 
 ## Cloud iPhone
 
-`phone-harness cloud start --iphone` asks the service for `platform: ios`,
-`kind: device` (both together; this is not the Android default). From then on
-the helpers drive it over HTTPS: every op is a POST to the host, screenshots
-come back as PNG bytes, and this machine needs no adb, no shell, and no Mac.
-It is the user's own phone, kept between sessions. `cloud stop` ends billing
-and returns at once; the phone keeps its own data, so there is no Android-style
-disk save to wait on. An Android session can stay up beside it: `cloud use SID`
-switches which one the helpers drive.
+Start it from the catalog: `phone-harness cloud start ios` when that is
+unambiguous, or the entry's id or label (`cloud ls`). The create body is
+`platform: "ios"`, `kind: "device"`, and `device_id` set to that entry's id.
+A ready session carries `control: {url, token, expires_at}` and no `adb`.
+From then on the helpers drive it over HTTPS. This machine needs no adb, no
+shell, and no Mac. `cloud stop` ends billing and returns at once; the phone
+keeps its own data. There is no Android-style disk save, and nothing on this
+phone for `cloud phone` to wipe.
 
-Length and the watch link are the **Cloud phones** commands above.
-The CLI sends a length on every start — default 15 minutes, cap 30
-(`cloud.minutes`, `cloud.max_minutes`) — via `--minutes N` or `--timeout`
-(`90s`, `15m`). That is longer than the service's own 300s default, which
-applies only when a client omits the length. An iPhone session reports
-`billing_mode: disabled`. `phone-harness cloud` and `cloud ls` show the time
-left (`*` marks the session the helpers are attached to). `cloud watch --print`
-prints the live-view link.
-`cloud use SID` attaches to a session that is already running. `cloud start
---iphone` reuses an iPhone this machine is already attached to. When `GET /me`
-lists more than one granted iPhone, pass `--device ID` (the `id` on
-`available`); with no id, a terminal asks and anything else gets the list and
-stops. One granted iPhone needs no `--device`. If that phone is already
-running, the error names `cloud use SID` and `cloud stop SID`. Stop when the
-user is done, and say that you did.
+An Android session can stay up beside it. Target one with `--session SID`.
+`cloud use SID` only changes the terminal fallback.
 
-Run scripts as plain `phone-harness`. `PHONE_HARNESS_PLATFORM=...` selects a
-local backend and skips the attached cloud phone.
+Length, billing, `ls`, `watch`, and `stop` are the **Cloud phones** commands
+above. An iPhone session reports `billing_mode: disabled`. Run scripts as
+plain `phone-harness` (with `--session` when you must pin one).
+`PHONE_HARNESS_PLATFORM=...` selects a local backend and skips the attached
+cloud phone.
 
-The mirroring section describes a Mac window. This phone is the HTTPS path:
-OCR on the host, taps in screen points.
+The mirroring section describes a Mac window. This phone is the HTTPS path.
 
-- **Read with `ocr()`.** `ocr()` and `ocr_pixels()` send `screen.text` /
-  `screen.text_pixels`. The host recognises the screen and returns boxes with
-  `source: "pixels"` and tap-ready centres, in screen points. `find_text()`,
-  `tap_text()`, `wait_for_text()`, and `scroll_collect()` work from Linux,
-  Windows, and macOS. Each call is a round trip to the host, so batch a
-  sub-task once you have proven it.
+The client posts `{"op", "kw"}` to `<control url>/op` and reads the host's
+list from `GET <control url>/ops` (`remote.py`). `supports(op)` is that list.
+`send` of an op the host did not list raises `Unsupported` before the POST
+(`this cloud phone cannot '…'`). The op names and the shapes below are the
+client vocabulary in `transport.py`. Result shapes are what this repo
+documents or decodes. The phone-host source was not available while this was
+written; anything that lives only there is marked unverified.
+
+| Op | Arguments | Result this client uses |
+| --- | --- | --- |
+| `screen.capture` | `path` optional | `(png_path, bounds)`. On the wire the host returns `png_b64` and `bounds`; the client writes the PNG. Timeout 60s. |
+| `screen.bounds` | | `{x, y, w, h, id}` or None |
+| `screen.require` | | bounds, or raise |
+| `screen.text` | `min_confidence` | `[{text, confidence, source, x, y, w, h}]`. `source` is `"pixels"` or `"tree"`. |
+| `screen.text_pixels` | `min_confidence` | same, forced through pixel OCR |
+| `input.tap` | `x, y` | host result, passed through |
+| `input.press` | `x, y, duration` | host result. Long press. |
+| `input.drag` | `x1, y1, x2, y2, duration, steps` | host result |
+| `input.scroll` | `x, y, dy, dx, steps` | host result. Content-space deltas. |
+| `input.keys` | `combo` | host result |
+| `input.text` | `s, delay, keystrokes` | host result. Timeout `max(60, 0.2 * len(s) + 30)` seconds. |
+| `nav.home` / `nav.back` / `nav.recents` | | host result, or `Unsupported` when the host says `unsupported` |
+| `apps.launch` | `name`, `fresh` | app id. Timeout 90s. |
+| `apps.current` | | app id or None |
+| `apps.list` | `include_system` | `[app id]`. Timeout 90s. |
+| `session.state` | | backend-defined string; `'ready'` when usable |
+| `session.require` | | bounds, or raise telling the user what to do |
+| `session.refocus` | | `None` here. The client does not call the host. |
+| `session.detail` | | a string. Local. |
+| `focus.probe` | | an opaque snapshot. Local: `(True,)`. |
+| `focus.diff` | `before, after` | `{raised, stole_focus}`. Local: both false. |
+| `tree` | | `[node]` where the device has one |
+| `raw` | backend-specific | host result |
+
+Trust `GET /ops` when the host's list is shorter than this table. A live
+cloud iPhone was previously reported to reject `tree`, `nav.back`, and
+`apps.current`; that report was not re-checked against phone-host.
+
+- **Coordinates are `screen.bounds`.** `tap(x, y)`, `find_window()`,
+  `send("screen.require")`, and OCR centres all use that space:
+  `{x, y, w, h, id}`. `screenshot()` is the PNG from `screen.capture`, which
+  is not always the same pixel size as `bounds`. One phone reported
+  `{x:0, y:0, w:750, h:1334, id:"iphone"}` while its PNGs were 576×1024.
+  That pair is a reported observation, not re-checked against phone-host.
+  Use `tap_image_point()` for a PNG pixel once `screen_info()` returns
+  `img_px`. Otherwise tap an OCR centre.
 - **`screen_info()`, `image_point()`, and `tap_image_point()` measure the
   PNG** so a point you read off a screenshot can become a tap. If
   `screen_info()` raises `ModuleNotFoundError: No module named 'Quartz'`,
@@ -201,31 +254,39 @@ OCR on the host, taps in screen points.
   ("screen_info() no longer needs macOS") is the change that reads the PNG
   header instead of importing Quartz; until `screen_info()` returns `img_px`
   off a Mac, treat the Quartz error as those three helpers only.
-- **`tap(x, y)` takes screen points**, the same space as `find_window()`,
-  `send("screen.require")`, and OCR centres. One phone reported
-  `{x:0, y:0, w:750, h:1334, id:"iphone"}` while its `screenshot()` PNGs were
-  576×1024. Use `tap_image_point()` for a PNG pixel once `screen_info()`
-  returns `img_px`. Otherwise tap an OCR centre.
-- **`ui()`, `back()`, and `current_app()` raise Unsupported on a live cloud
-  iPhone.** The host's vocabulary is `screen.capture`, `screen.bounds`,
-  `screen.require`, `screen.text`, `screen.text_pixels`, `input.tap`,
-  `input.press`, `input.drag`, `input.scroll`, `input.keys`, `input.text`,
-  `nav.home`, `nav.back`, `nav.recents`, `apps.launch`, `apps.current`,
-  `apps.list`, `session.state`, `session.require`, `session.refocus`,
-  `session.detail`, `focus.probe`, `focus.diff`, `tree`, `raw`. A live iPhone
-  answers `tree`, `nav.back`, and `apps.current` with HTTP 400
-  `{"unsupported": true}`, which the client raises as `Unsupported`
-  (`supports('tree')` is false; `ui()` says `this cloud phone cannot 'tree'`).
-  `home()` is the Home button. `shell()` is Unsupported. Trust `ops()` when
-  the host's list differs.
-- **Confirm `open_app`.** It sends `apps.launch` (the client allows it up to
-  90s) and can return with the app still not in front. Check with `ocr()` or
-  a screenshot. If it missed, `home()` and tap the icon. `tap_icon()` in
+- **Type into a field that already has focus.** `type_text` sends
+  `input.text`. Tap the field and let the keyboard appear first; text sent
+  before focus goes nowhere, so check with `ocr()` afterwards. The default
+  is a paste (`keystrokes` false), which arrives as written. `keystrokes=True`
+  asks for real key events. Whether the SE delivers those through a paired
+  Bluetooth keyboard and the other phones through the on-screen keyboard is
+  **unverified**: the phone-host tree was not readable from here.
+- **Screenshot, act, then check.** Do one thing, then `ocr()` or
+  `screenshot()`, then the next thing. Do not `wait(n)` for a screen to load.
+  The client gives `screen.capture` 60s, `apps.launch` / `apps.list` 90s, and
+  `input.text` the scaled timeout above. How long the host waits for the
+  screen to settle after a tap is **unverified** in phone-host.
+- **Errors from the control host, as this client handles them.** HTTP 400
+  with `unsupported: true` raises `Unsupported` (retrying will not help).
+  HTTP 404 raises `RuntimeError`: the session is gone or the grant expired.
+  Any other HTTP status, including 409, raises `RuntimeError` with the host's
+  `error` string. Codes `busy` and `device_unavailable` on that 409 are
+  **unverified** here; phone-host was not available to confirm them. The
+  session API's own `409` `device_unavailable` and `409` `profile_running`
+  happen on `cloud start`, before any op, and are described under **Cloud
+  phones**.
+- **`ui()`, `back()`, and `current_app()` raise Unsupported** when the host
+  does not list `tree`, `nav.back`, and `apps.current`. `home()` is the Home
+  button. `shell()` is Unsupported.
+- **Confirm `open_app`.** It sends `apps.launch` and can return with the app
+  still not in front. Check with `ocr()` or a screenshot. If it missed,
+  `home()` and tap the icon. `tap_icon()` in
   `agent-workspace/agent_helpers.py` aims 35 points above the label for the
   mirroring window, so measure this phone's icon yourself.
-- **An Apple Account password has to be typed on the phone.** Remote typing
-  is refused on that screen. Hand over with `phone-harness cloud open` and
-  wait until the user says they are done.
+- **An Apple Account password has to be typed on the phone.** Hand over with
+  `phone-harness cloud open` and wait until the user says they are done.
+  Remote typing being refused on that screen is carried forward from earlier
+  notes; it was **not re-verified** in phone-host.
 
 ## Android
 

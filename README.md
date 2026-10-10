@@ -62,19 +62,24 @@ guide; [helpers.py](src/phone_harness/helpers.py) is the full list.
 
 ```bash
 phone-harness cloud login            # once: approve in your browser
-phone-harness cloud start            # your own Android; default 15 min (--minutes or --timeout)
-phone-harness cloud start --iphone   # platform ios, kind device; --device ID if several
+phone-harness cloud ls               # phones on the account, and any live session
+phone-harness cloud start            # the account default, for 15 min (--for 90s, 15m, or minutes)
+phone-harness cloud start ios        # the account's iPhone, when only one is listed
 phone-harness <<'PY'
 print(screenshot())
 PY
-phone-harness cloud stop             # billing stops; an Android phone is saved
+phone-harness cloud stop             # billing stops; a saved Android is written back
 ```
 
-A [cloud Android](https://phone-harness.com/cloud) is reached over adb, so every
-helper works on it unchanged. A cloud iPhone (`cloud start --iphone`) has no
-shell: the helpers POST ops over HTTPS, OCR runs on the host, and driving it
-is in [SKILL.md](SKILL.md). `phone-harness cloud` lists the rest: `ls`,
-`watch`, `use`, `history`, and `start --temp` for a throwaway Android.
+`cloud ls` is the catalog (`GET /me` → `available`): each phone's label,
+platform, and id, with a live session on that row. `cloud start` with no name
+asks for the account default. A name is a catalog id or label, or `ios` /
+`android` when only one entry has that platform. A [cloud Android](https://phone-harness.com/cloud)
+is reached over adb, so every helper works on it unchanged. A cloud iPhone has
+no shell: the helpers POST ops over HTTPS, OCR runs on the host, and driving
+it is in [SKILL.md](SKILL.md). `phone-harness cloud` lists the rest, including
+`watch`, `open`, `history`, and `phone` for the saved Android. `--session SID`
+(or `PHONE_HARNESS_SESSION`) pins one rented phone for this process.
 
 ## How it works
 
@@ -87,10 +92,10 @@ HID-level events for taps, swipes, and typing.
 accessibility tree is the text source, `input` is the hands. Works over USB or
 Wi‑Fi, no window needed.
 
-**Cloud iPhone.** `phone-harness cloud start --iphone` drives the account's
-iPhone over HTTPS from any OS. The host runs OCR; taps use the phone's screen
-points. No adb and no accessibility tree. Day-to-day steps are in
-[SKILL.md](SKILL.md).
+**Cloud iPhone.** `phone-harness cloud start` with that phone's catalog id,
+label, or `ios` when it is the only one, drives it over HTTPS from any OS.
+The host runs OCR; taps use the phone's screen points. No adb and no
+accessibility tree. Day-to-day steps are in [SKILL.md](SKILL.md).
 
 Same helpers throughout. `phone-harness config set platform ios|android` picks
 the desk default.

@@ -1,6 +1,7 @@
 """The phone-harness CLI: exec Python from stdin with helpers pre-imported."""
 import functools
 import io
+import os
 import sys
 import time
 from pathlib import Path
@@ -13,11 +14,15 @@ USAGE = """Usage:
   PY
 
 Commands:
+  phone-harness --session SID <<'PY'   pin one cloud phone for this process
   phone-harness --doctor [ios|android]   diagnose the phone the helpers would drive
   phone-harness skill       print the phone-harness skill text
   phone-harness android ... pair/connect/choose an Android phone
-  phone-harness cloud ...   rent a cloud phone: `cloud login`, `cloud start`, `cloud stop`
+  phone-harness cloud ...   rent a catalog phone: `cloud login`, `cloud ls`, `cloud start [PHONE]`
   phone-harness config ...  settings: `config set platform android`
+
+--session SID (or PHONE_HARNESS_SESSION) selects one rented phone. With neither,
+a script follows the attached session.
 """
 
 
@@ -210,8 +215,27 @@ def main():
     )
 
 
+def _take_session(args):
+    """Pull `--session SID` off the front of any command, including a script.
+    The flag wins over PHONE_HARNESS_SESSION already in the environment."""
+    out, i, pinned = [], 0, None
+    while i < len(args):
+        if args[i] == "--session":
+            if i + 1 >= len(args):
+                sys.exit("--session needs a SID")
+            pinned = args[i + 1]
+            i += 2
+            continue
+        out.append(args[i])
+        i += 1
+    if pinned:
+        os.environ["PHONE_HARNESS_SESSION"] = pinned
+    return out
+
+
 def _run(args):
     global _phone_name
+    args = _take_session(args)
     if args and args[0] in {"-h", "--help"}:
         print(USAGE)
         return

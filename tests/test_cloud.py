@@ -35,13 +35,46 @@ esac
 '''
 
 
+def _fake_catalog(c):
+    """The account catalog. Tests that leave `available` unset get the saved
+    Android plus a temporary phone, which is what a normal account holds."""
+    if c.available is not None:
+        return c.available
+    return [
+        {"platform": "android", "kind": "emulator", "id": c.profile["id"],
+         "label": "Saved phone", "state": c.profile.get("state") or "stored",
+         "default": True},
+        {"platform": "android", "kind": "emulator", "temporary": True,
+         "label": "Temporary phone"},
+    ]
+
+
+def _fake_resolve(c, body):
+    """What the service makes of a create body. `posts` keeps the raw body."""
+    if "platform" in body or "kind" in body:
+        return dict(body)
+    defaults = [e for e in _fake_catalog(c) if e.get("default")]
+    entry = defaults[0] if len(defaults) == 1 else None
+    if entry is None:
+        return {**body, "platform": "android", "kind": "emulator",
+                "profile_id": c.profile["id"]}
+    out = {**body, "platform": entry.get("platform"), "kind": entry.get("kind")}
+    if entry.get("temporary"):
+        return out
+    if entry.get("platform") == "ios" and entry.get("id"):
+        out["device_id"] = entry["id"]
+    elif entry.get("id"):
+        out["profile_id"] = entry["id"]
+    return out
+
+
 class FakeCloud(BaseHTTPRequestHandler):
-    sessions, profile, polls, posts = {}, {}, {}, []
+    sessions, profile, polls, posts, keys = {}, {}, {}, [], []
     valid, token_polls, refreshes, revoked = set(), 0, 0, []
     closing_reads = 0
     forbid = False
     control_url = None            # set: an iPhone's control grant points here
-    available = None              # set: GET /me includes `available`
+    available = None              # set: replaces the synthesized catalog
     fail = None                   # set: POST /sessions returns this instead
 
     def _oauth(self, path, form):
@@ -102,11 +135,11 @@ class FakeCloud(BaseHTTPRequestHandler):
                   "price_cents_per_minute": 5, "can_rent": True,
                   "active_session_count": len(c.sessions),
                   "session_limit": 3, "profile": c.profile,
-                  "default": {"platform": "android", "kind": "emulator"}}
-            if c.available is not None:
-                me["available"] = c.available
+                  "default": {"platform": "android", "kind": "emulator"},
+                  "available": _fake_catalog(c)}
             return self._send(200, me)
         if (m, path) == ("POST", "/sessions"):
+            c.keys.append(self.headers.get("Idempotency-Key"))
             c.posts.append(body)
             if c.fail:
                 status, payload, extra = c.fail
@@ -125,8 +158,9 @@ class FakeCloud(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "provider was replaced by platform and kind"})
             if ("platform" in body) ^ ("kind" in body):
                 return self._send(400, {"error": "platform and kind go together"})
-            iphone = body.get("platform") == "ios" and body.get("kind") == "device"
-            if body.get("profile_id") and c.profile["state"] == "running":
+            resolved = _fake_resolve(c, body)
+            iphone = resolved.get("platform") == "ios" and resolved.get("kind") == "device"
+            if resolved.get("profile_id") and c.profile["state"] == "running":
                 return self._send(409, {"error": "held", "code": "profile_running",
                                         "session": c.profile["session"]})
             if iphone and isinstance(c.available, list):
@@ -147,16 +181,16 @@ class FakeCloud(BaseHTTPRequestHandler):
                                             "session": phone.get("session") or "liveiphone"})
             sid = f"sid{len(c.posts):03d}"
             c.sessions[sid] = {"id": sid, "state": "provisioning",
-                               "platform": "ios" if iphone else "android",
-                               "kind": "device" if iphone else "emulator",
+                               "platform": "ios" if iphone else (resolved.get("platform") or "android"),
+                               "kind": "device" if iphone else (resolved.get("kind") or "emulator"),
                                "device": "iPhone" if iphone else "Android emulator",
                                "billing_mode": "disabled" if iphone else "metered",
-                               # Present on an iPhone too; the CLI must not treat that as a save.
-                               "profile": "prof-1" if iphone else body.get("profile_id"),
-                               "phone": body.get("device_id"),
+                               "profile": resolved.get("profile_id"),
+                               "device_id": resolved.get("device_id"),
+                               "phone": resolved.get("device_id"),
                                "expires_at": time.time() + body["timeout_seconds"],
                                "watch_url": "https://watch.example/secret"}
-            if body.get("profile_id"):
+            if resolved.get("profile_id"):
                 c.profile.update(state="running", session=sid)
             return self._send(202, c.sessions[sid])
         if (m, path) == ("GET", "/sessions"):
@@ -236,7 +270,7 @@ class CloudCli(unittest.TestCase):
         adb = Path(self.home.name) / "adb"
         adb.write_text(FAKE_ADB)
         adb.chmod(adb.stat().st_mode | stat.S_IEXEC)
-        FakeCloud.sessions, FakeCloud.polls, FakeCloud.posts = {}, {}, []
+        FakeCloud.sessions, FakeCloud.polls, FakeCloud.posts, FakeCloud.keys = {}, {}, [], []
         FakeCloud.valid, FakeCloud.token_polls = set(), 0
         FakeCloud.refreshes, FakeCloud.revoked, FakeCloud.closing_reads = 0, [], 0
         FakeCloud.forbid = False
@@ -254,7 +288,8 @@ class CloudCli(unittest.TestCase):
                     "PHONE_HARNESS_CLOUD_API": f"http://127.0.0.1:{self.server.server_port}",
                     "PHONE_HARNESS_CLOUD_OAUTH_ISSUER": f"http://127.0.0.1:{self.server.server_port}",
                     "PHONE_HARNESS_CLOUD_OAUTH_CLIENT_ID": "cli-client"}
-        for name in ("PHONE_HARNESS_API_KEY", "ANDROID_SERIAL", "PHONE_HARNESS_PLATFORM"):
+        for name in ("PHONE_HARNESS_API_KEY", "ANDROID_SERIAL", "PHONE_HARNESS_PLATFORM",
+                     "PHONE_HARNESS_SESSION"):
             self.env.pop(name, None)
 
     def run_cli(self, *args, stdin=None, env=None):
@@ -322,7 +357,8 @@ class CloudCli(unittest.TestCase):
         self.login()
         r = self.run_cli("cloud", "start", "--minutes", "5")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(FakeCloud.posts, [{"timeout_seconds": 300, "profile_id": "prof-1"}])
+        self.assertEqual(FakeCloud.posts, [{"timeout_seconds": 300}])
+        self.assertRegex(FakeCloud.keys[0] or "", r"^[A-Za-z0-9_-]{16,128}$")
         self.assertIn("Resumed exactly", r.stdout)
         self.assertNotIn("ph_code", r.stdout)
         self.assertNotIn("watch.example", r.stdout)
@@ -330,12 +366,15 @@ class CloudCli(unittest.TestCase):
         self.assertIn("connect live.example:22220", log)
         self.assertIn("shell unlock ph_code", log)
 
-        again = self.run_cli("cloud", "start")            # idempotent: no second phone
+        again = self.run_cli("cloud", "start")            # same catalog choice: no second phone
         self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertIn("reusing", again.stdout)
         self.assertEqual(len(FakeCloud.posts), 1)
 
         ls = self.run_cli("cloud", "ls")
-        self.assertIn("* sid001", ls.stdout)
+        line = next(l for l in ls.stdout.splitlines() if "sid001" in l)
+        self.assertTrue(line.startswith("*"), ls.stdout)
+        self.assertIn("Saved phone", line)
 
     def test_start_opens_the_live_view_unless_told_not_to(self):
         self.login()
@@ -393,7 +432,7 @@ class CloudCli(unittest.TestCase):
         """A temp session has no profile, so closing it must not look like a save
         and must not relabel the stored phone."""
         self.login()
-        self.assertEqual(self.run_cli("cloud", "start", "--temp").returncode, 0)
+        self.assertEqual(self.run_cli("cloud", "start", "Temporary phone").returncode, 0)
         sid = json.loads((Path(self.home.name) / "state" / "cloud.json").read_text())["session"]["sid"]
         self.assertFalse(FakeCloud.sessions[sid].get("profile"))
         FakeCloud.sessions[sid]["state"] = "closing"
@@ -406,11 +445,15 @@ class CloudCli(unittest.TestCase):
     def test_a_closing_iphone_is_not_a_save(self):
         """An iPhone session can name a profile; closing it still is not a save."""
         self.login()
-        started = self.run_cli("cloud", "start", "--iphone", "--no-watch",
+        FakeCloud.available = [
+            {"platform": "ios", "kind": "device", "id": "iph-1", "label": "My iPhone SE",
+             "state": "available"}]
+        started = self.run_cli("cloud", "start", "ios", "--no-watch",
                                env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
         self.assertEqual(started.returncode, 0, started.stderr)
         sid = json.loads((Path(self.home.name) / "state" / "cloud.json").read_text())["session"]["sid"]
-        self.assertEqual(FakeCloud.sessions[sid].get("profile"), "prof-1")
+        # A control session may name a profile; closing it is still not a save.
+        FakeCloud.sessions[sid]["profile"] = "prof-1"
         FakeCloud.sessions[sid]["state"] = "closing"
         r = self.run_cli("cloud")
         self.assertIn("· closing ·", r.stdout)
@@ -420,8 +463,11 @@ class CloudCli(unittest.TestCase):
 
     def test_temp_phone_and_minutes_cap(self):
         self.login()
-        self.assertEqual(self.run_cli("cloud", "start", "--temp").returncode, 0)
-        self.assertEqual(FakeCloud.posts, [{"timeout_seconds": 900}])
+        self.assertEqual(self.run_cli("cloud", "start", "Temporary phone").returncode, 0)
+        self.assertEqual(FakeCloud.posts, [{"timeout_seconds": 900, "platform": "android",
+                                            "kind": "emulator"}])
+        self.assertNotIn("profile_id", FakeCloud.posts[0])
+        self.assertNotIn("device_id", FakeCloud.posts[0])
         over = self.run_cli("cloud", "start", "--minutes", "999")
         self.assertEqual(over.returncode, 1)
         self.assertIn("between 1 and 30", over.stderr)
@@ -434,8 +480,10 @@ class CloudCli(unittest.TestCase):
             "adb": {"host": "live.example", "port": 22220, "code": "ph_code"}}
         FakeCloud.profile.update(state="running", session="dash01")
         r = self.run_cli("cloud", "start")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("already running", r.stdout)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("already running", r.stderr)
+        self.assertIn("--session", r.stderr)
+        self.assertIn("dash01", r.stderr)
         self.assertEqual(FakeCloud.posts, [])
 
     def test_helpers_drive_the_rented_phone_and_relock_is_healed(self):
@@ -466,14 +514,17 @@ class CloudCli(unittest.TestCase):
         FakeCloud.control_url = f"http://127.0.0.1:{control.server_port}"
         FakeControl.calls = []
         self.login()
-        r = self.run_cli("cloud", "start", "--iphone", "--no-watch", env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
+        FakeCloud.available = [
+            {"platform": "ios", "kind": "device", "id": "iph-1", "label": "My iPhone SE",
+             "state": "available"}]
+        r = self.run_cli("cloud", "start", "ios", "--no-watch", env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(FakeCloud.posts[0]["platform"], "ios")
         self.assertEqual(FakeCloud.posts[0]["kind"], "device")
+        self.assertEqual(FakeCloud.posts[0]["device_id"], "iph-1")
         self.assertEqual(FakeCloud.posts[0]["timeout_seconds"], 900)
         self.assertNotIn("provider", FakeCloud.posts[0])
         self.assertNotIn("profile_id", FakeCloud.posts[0])
-        self.assertNotIn("device_id", FakeCloud.posts[0])
         self.assertIn("Starting your iPhone", r.stdout)
         self.assertIn("control", r.stdout)
         self.assertNotIn("adb", r.stdout)
@@ -523,11 +574,12 @@ class CloudCli(unittest.TestCase):
         FakeCloud.sessions["old001"] = {"id": "old001", "state": "closing", "profile": "prof-1",
                                        "expires_at": time.time() + 600}
         FakeCloud.profile.update(state="running", session="old001")
-        FakeCloud.closing_reads = 2                       # then it is saved
+        # One read builds the catalog; the wait then sees the phone still closing.
+        FakeCloud.closing_reads = 3
         r = self.run_cli("cloud", "start")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("still saving", r.stdout)
-        self.assertEqual(FakeCloud.posts, [{"timeout_seconds": 900, "profile_id": "prof-1"}])
+        self.assertEqual(FakeCloud.posts, [{"timeout_seconds": 900}])
 
     def test_stop_returns_at_once_and_detaches(self):
         self.login()
@@ -552,117 +604,238 @@ class CloudCli(unittest.TestCase):
 
     def test_a_temporary_phone_has_nothing_to_save(self):
         self.login()
-        self.run_cli("cloud", "start", "--temp")
+        self.run_cli("cloud", "start", "Temporary phone")
         r = self.run_cli("cloud", "stop")
         self.assertNotIn("saved", r.stdout)
 
-    def test_iphone_flags_and_create_errors(self):
+    def test_removed_flags_are_not_phone_names(self):
         self.login()
-        both = self.run_cli("cloud", "start", "--iphone", "--temp")
-        self.assertNotEqual(both.returncode, 0)
-        self.assertIn("--temp", both.stderr)
-        bare = self.run_cli("cloud", "start", "--device", "iph-a")
-        self.assertNotEqual(bare.returncode, 0)
-        self.assertIn("--iphone", bare.stderr)
+        for flag in ("--iphone", "--device", "--temp", "--timeout"):
+            r = self.run_cli("cloud", "start", flag)
+            self.assertNotEqual(r.returncode, 0, flag)
+            self.assertIn(flag, r.stderr)
         self.assertEqual(FakeCloud.posts, [])
 
+    def test_catalog_start_is_exact_and_an_ambiguous_name_stops(self):
+        self.login()
         FakeCloud.available = [
             {"platform": "ios", "kind": "device", "id": "iph-a", "label": "SE", "state": "available"},
             {"platform": "ios", "kind": "device", "id": "iph-b", "label": "Pro", "state": "unavailable"},
         ]
-        many = self.run_cli("cloud", "start", "--iphone", "--no-watch")
+        many = self.run_cli("cloud", "start", "ios", "--no-watch")
         self.assertNotEqual(many.returncode, 0)
-        self.assertIn("iph-a", many.stderr)
-        self.assertIn("Pro", many.stderr)
-        self.assertIn("--device", many.stderr)
+        shown = many.stdout + many.stderr
+        self.assertIn("SE", shown)
+        self.assertIn("Pro", shown)
+        self.assertIn("iph-a", shown)
         self.assertEqual(FakeCloud.posts, [])
 
-        missing = self.run_cli("cloud", "start", "--iphone", "--device", "nope", "--no-watch")
+        missing = self.run_cli("cloud", "start", "nope", "--no-watch")
         self.assertIn("nope", missing.stderr)
-        self.assertIn("granted", missing.stderr)
+        self.assertIn("catalog", missing.stderr)
         self.assertEqual(FakeCloud.posts, [])
 
-        down = self.run_cli("cloud", "start", "--iphone", "--device", "iph-b", "--no-watch")
+        down = self.run_cli("cloud", "start", "iph-b", "--no-watch",
+                            env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
         self.assertNotEqual(down.returncode, 0)
         self.assertIn("not on its host", down.stderr)
 
         FakeCloud.available = [
             {"platform": "ios", "kind": "device", "id": "iph-a", "label": "SE",
              "state": "running", "session": "live1"}]
-        held = self.run_cli("cloud", "start", "--iphone", "--no-watch")
+        held = self.run_cli("cloud", "start", "SE", "--no-watch",
+                            env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
         self.assertNotEqual(held.returncode, 0)
-        self.assertIn("cloud use live1", held.stderr)
-        self.assertIn("cloud stop live1", held.stderr)
+        self.assertIn("--session", held.stderr)
+        self.assertIn("live1", held.stderr)
+        self.assertNotIn("cloud use", held.stderr)
 
         FakeCloud.available = [
-            {"platform": "android", "kind": "emulator", "label": "Android emulator", "temporary": True}]
+            {"platform": "android", "kind": "emulator", "label": "Temporary phone", "temporary": True}]
         before = len(FakeCloud.posts)
-        none = self.run_cli("cloud", "start", "--iphone", "--no-watch")
-        self.assertIn("no iPhone", none.stderr)
+        none = self.run_cli("cloud", "start", "ios", "--no-watch")
+        self.assertIn("catalog", none.stderr)
         self.assertEqual(len(FakeCloud.posts), before)
 
-        FakeCloud.available = None
+    def test_create_errors_name_the_next_step(self):
+        self.login()
         FakeCloud.fail = (400, {"error": "no phone of that platform and kind available to this account"}, None)
-        hinted = self.run_cli("cloud", "start", "--iphone", "--no-watch")
-        self.assertIn("no iPhone available", hinted.stderr)
+        hinted = self.run_cli("cloud", "start", "Saved phone", "--no-watch")
+        self.assertIn("no phone of that platform and kind", hinted.stderr)
+        self.assertIn("Saved phone", hinted.stderr)
         FakeCloud.fail = (409, {"error": "limit", "code": "session_limit",
                                 "active_session_count": 2, "session_limit": 2}, None)
-        limited = self.run_cli("cloud", "start", "--iphone", "--no-watch")
+        limited = self.run_cli("cloud", "start", "--no-watch")
         self.assertIn("2 of 2", limited.stderr)
         FakeCloud.fail = (503, {"error": "busy", "code": "phones_busy"}, {"Retry-After": "12"})
-        busy = self.run_cli("cloud", "start", "--iphone", "--no-watch")
+        busy = self.run_cli("cloud", "start", "--no-watch")
         self.assertIn("Try again in 12s", busy.stderr)
         FakeCloud.fail = (403, {"error": "blocked", "code": "account_blocked"}, None)
-        blocked = self.run_cli("cloud", "start", "--iphone", "--no-watch")
+        blocked = self.run_cli("cloud", "start", "--no-watch")
         self.assertIn("Rentals are blocked", blocked.stderr)
         self.assertNotIn("isn't enabled", blocked.stderr)
-        FakeCloud.fail = None
+        FakeCloud.fail = (403, {"error": "not enough credit", "balance_cents": 0}, None)
+        broke = self.run_cli("cloud", "start", "--no-watch")
+        self.assertIn("Not enough credit", broke.stderr)
+        self.assertNotIn("isn't enabled", broke.stderr)
 
+    def test_one_iphone_starts_by_platform_or_id_and_for_sets_the_length(self):
+        self.login()
         FakeCloud.available = [
             {"platform": "ios", "kind": "device", "id": "iph-a", "label": "SE", "state": "available"}]
-        r = self.run_cli("cloud", "start", "--iphone", "--timeout", "2m", "--no-watch")
+        r = self.run_cli("cloud", "start", "ios", "--for", "2m", "--no-watch",
+                         env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
         self.assertEqual(r.returncode, 0, r.stderr)
-        sent = [p for p in FakeCloud.posts if p.get("platform") == "ios"][-1]
-        self.assertEqual(sent["timeout_seconds"], 120)
-        self.assertNotIn("device_id", sent)
-        named = self.run_cli("cloud", "start", "--iphone", "--device", "iph-a", "--timeout", "45s", "--no-watch")
-        # already attached to the only iPhone, so this reuses and does not post again
+        self.assertEqual(FakeCloud.posts[-1]["timeout_seconds"], 120)
+        self.assertEqual(FakeCloud.posts[-1]["device_id"], "iph-a")
+        self.assertEqual(FakeCloud.posts[-1]["platform"], "ios")
+        self.assertEqual(FakeCloud.posts[-1]["kind"], "device")
+        named = self.run_cli("cloud", "start", "iph-a", "--for", "45s", "--no-watch",
+                             env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
         self.assertEqual(named.returncode, 0, named.stderr)
         self.assertIn("reusing", named.stdout)
+        self.assertEqual(len(FakeCloud.posts), 1)
         self.run_cli("cloud", "stop")
-        posted = self.run_cli("cloud", "start", "--iphone", "--device", "iph-a", "--timeout", "45", "--no-watch")
+        posted = self.run_cli("cloud", "start", "SE", "--for", "45s", "--no-watch",
+                              env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
         self.assertEqual(posted.returncode, 0, posted.stderr)
         self.assertEqual(FakeCloud.posts[-1]["device_id"], "iph-a")
         self.assertEqual(FakeCloud.posts[-1]["timeout_seconds"], 45)
-        self.run_cli("cloud", "stop")
-        over = self.run_cli("cloud", "start", "--iphone", "--timeout", "90m", "--no-watch")
+        over = self.run_cli("cloud", "start", "--for", "90m", "--no-watch")
         self.assertNotEqual(over.returncode, 0)
-        self.assertIn("30 minutes", over.stderr)
-        clash = self.run_cli("cloud", "start", "--minutes", "5", "--timeout", "90")
+        self.assertIn("between 1 and 30", over.stderr)
+        clash = self.run_cli("cloud", "start", "--minutes", "5", "--for", "90s")
         self.assertIn("not both", clash.stderr)
+
+    def test_for_accepts_seconds_minutes_and_a_bare_number(self):
+        self.login()
+        for text, seconds in (("90s", 90), ("15m", 900), ("2", 120), ("15min", 900)):
+            if FakeCloud.sessions:
+                stopped = self.run_cli("cloud", "stop")
+                self.assertEqual(stopped.returncode, 0, stopped.stderr)
+            r = self.run_cli("cloud", "start", "Temporary phone", "--for", text, "--no-watch")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(FakeCloud.posts[-1]["timeout_seconds"], seconds, text)
+            self.assertNotIn("profile_id", FakeCloud.posts[-1])
 
     def test_android_timeout_keeps_the_profile_body(self):
         self.login()
-        r = self.run_cli("cloud", "start", "--timeout", "120s", "--no-watch")
+        r = self.run_cli("cloud", "start", "Saved phone", "--for", "120s", "--no-watch")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(FakeCloud.posts, [{"timeout_seconds": 120, "profile_id": "prof-1"}])
+        self.assertEqual(FakeCloud.posts, [{"timeout_seconds": 120, "platform": "android",
+                                            "kind": "emulator", "profile_id": "prof-1"}])
 
     def test_an_iphone_and_an_android_can_run_together(self):
         self.login()
+        FakeCloud.available = [
+            {"platform": "android", "kind": "emulator", "id": "prof-1", "label": "Saved phone",
+             "state": "stored", "default": True},
+            {"platform": "ios", "kind": "device", "id": "iph-1", "label": "My iPhone SE",
+             "state": "available"},
+        ]
         first = self.run_cli("cloud", "start", "--minutes", "5", "--no-watch")
         self.assertEqual(first.returncode, 0, first.stderr)
-        second = self.run_cli("cloud", "start", "--iphone", "--no-watch")
+        self.assertEqual(FakeCloud.posts[0], {"timeout_seconds": 300})
+        second = self.run_cli("cloud", "start", "ios", "--no-watch",
+                              env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertIn("stays up", second.stdout)
         self.assertEqual(FakeCloud.posts[1]["platform"], "ios")
         self.assertEqual(FakeCloud.posts[1]["kind"], "device")
+        self.assertEqual(FakeCloud.posts[1]["device_id"], "iph-1")
         self.assertEqual(len(FakeCloud.sessions), 2)
         back = self.run_cli("cloud", "start", "--no-watch")
         self.assertEqual(back.returncode, 0, back.stderr)
-        self.assertIn("already running", back.stdout)
-        self.assertEqual(len(FakeCloud.posts), 2)          # attached to the Android; no third phone
+        self.assertIn("reusing", back.stdout)
+        self.assertEqual(len(FakeCloud.posts), 2)
         self.assertIn("your phone", back.stdout)
         self.assertNotIn("your iPhone", back.stdout)
+
+    def test_ls_merges_the_catalog_with_a_session_that_matches_nothing(self):
+        self.login()
+        FakeCloud.available = [
+            {"platform": "android", "kind": "emulator", "id": "prof-1", "label": "Saved phone",
+             "state": "stored", "default": True},
+            {"platform": "ios", "kind": "device", "id": "iph-1", "label": "My iPhone SE",
+             "state": "available"},
+            {"platform": "android", "kind": "emulator", "temporary": True, "label": "Temporary phone"},
+        ]
+        self.assertEqual(self.run_cli("cloud", "start", "Saved phone", "--no-watch").returncode, 0)
+        FakeCloud.sessions["orphan"] = {
+            "id": "orphan", "state": "ready", "platform": "android", "profile": "prof-other",
+            "expires_at": time.time() + 600,
+            "adb": {"host": "live.example", "port": 22220, "code": "ph_code"}}
+        raw = self.run_cli("cloud", "ls", "--json")
+        self.assertEqual(raw.returncode, 0, raw.stderr)
+        rows = json.loads(raw.stdout)
+        self.assertEqual([row["label"] for row in rows[:3]],
+                         ["Saved phone", "My iPhone SE", "Temporary phone"])
+        self.assertTrue(rows[0]["default"])
+        self.assertFalse(rows[0]["temporary"])
+        self.assertEqual(rows[0]["id"], "prof-1")
+        self.assertEqual(rows[0]["platform"], "android")
+        self.assertEqual(rows[0]["state"], "stored")
+        self.assertEqual(rows[0]["session"]["id"], "sid001")
+        self.assertTrue(rows[0]["targeted"])
+        self.assertIsNone(rows[1]["session"])
+        self.assertFalse(rows[1]["targeted"])
+        self.assertTrue(rows[-1]["unmatched"])
+        self.assertEqual(rows[-1]["session"]["id"], "orphan")
+        text = self.run_cli("cloud", "ls")
+        self.assertIn("orphan", text.stdout)
+        self.assertTrue(any(line.startswith("*") and "sid001" in line
+                            for line in text.stdout.splitlines()))
+
+    def test_a_session_pin_targets_one_phone_for_commands_and_helpers(self):
+        self.login()
+        FakeCloud.available = [
+            {"platform": "android", "kind": "emulator", "id": "prof-1", "label": "Saved phone",
+             "state": "stored", "default": True},
+            {"platform": "ios", "kind": "device", "id": "iph-1", "label": "My iPhone SE",
+             "state": "available"},
+        ]
+        self.assertEqual(self.run_cli("cloud", "start", "--no-watch").returncode, 0)
+        self.assertEqual(self.run_cli("cloud", "start", "ios", "--no-watch",
+                                      env={"PHONE_HARNESS_ADB": "/nonexistent/adb"}).returncode, 0)
+        state = json.loads((Path(self.home.name) / "state" / "cloud.json").read_text())
+        android_sid = next(s["sid"] for s in state["sessions"].values() if s["link"]["kind"] == "adb")
+        ios_sid = next(s["sid"] for s in state["sessions"].values() if s["link"]["kind"] == "control")
+
+        def starred(result, sid):
+            line = next(l for l in result.stdout.splitlines() if sid in l)
+            return line.startswith("*")
+
+        plain = self.run_cli("cloud", "ls")
+        self.assertTrue(starred(plain, ios_sid), plain.stdout)
+        self.assertFalse(starred(plain, android_sid), plain.stdout)
+        pinned = self.run_cli("cloud", "ls", "--session", android_sid)
+        self.assertTrue(starred(pinned, android_sid), pinned.stdout)
+        self.assertFalse(starred(pinned, ios_sid), pinned.stdout)
+        via_env = self.run_cli("cloud", "ls", env={"PHONE_HARNESS_SESSION": android_sid})
+        self.assertTrue(starred(via_env, android_sid), via_env.stdout)
+
+        script = "from phone_harness import transport\nprint(transport.connect().name)\n"
+        remote = self.run_cli("--session", ios_sid, stdin=script)
+        self.assertEqual(remote.stdout.strip(), "remote", remote.stderr)
+        android = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                                 env={**self.env, "PHONE_HARNESS_SESSION": android_sid})
+        self.assertEqual(android.stdout.strip(), "android", android.stderr)
+
+        stopped = self.run_cli("cloud", "stop", "--session", android_sid)
+        self.assertEqual(stopped.returncode, 0, stopped.stderr)
+        self.assertIn(android_sid, stopped.stdout)
+        self.assertNotIn(android_sid, FakeCloud.sessions)
+        self.assertIn(ios_sid, FakeCloud.sessions)
+        self.assertIn("your iPhone", self.run_cli("cloud").stdout)
+
+    def test_phone_reset_describes_the_saved_android_only(self):
+        self.login()
+        refused = self.run_cli("cloud", "phone", "reset")
+        self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("saved Android", refused.stderr)
+        self.assertIn("no iPhone reset", refused.stderr)
+        help_text = self.run_cli("cloud", "nope")
+        self.assertIn("wipes its stored state", help_text.stdout)
 
 
 if __name__ == "__main__":
