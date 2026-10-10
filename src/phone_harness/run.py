@@ -26,6 +26,35 @@ a script follows the attached session.
 """
 
 
+def _write_utf8(text):
+    """Write text as UTF-8.
+
+    Windows pipes and consoles often use cp1252 (`phone-harness skill > file`).
+    Reconfigure the text stream when it allows it; if that still cannot encode
+    the text, write UTF-8 bytes to the buffer.
+    """
+    out = sys.stdout
+    try:
+        out.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, OSError, ValueError):
+        pass
+    try:
+        out.write(text)
+        out.flush()
+        return
+    except UnicodeEncodeError:
+        pass
+    data = text.encode("utf-8", errors="replace")
+    buf = getattr(out, "buffer", None)
+    if buf is not None:
+        buf.write(data)
+        buf.flush()
+        return
+    encoding = getattr(out, "encoding", None) or "ascii"
+    out.write(data.decode(encoding, errors="replace"))
+    out.flush()
+
+
 def _skill_text():
     """SKILL.md: packaged alongside the code in a wheel; at the repo root in
     a checkout (where the launcher runs the working tree)."""
@@ -252,7 +281,7 @@ def _run(args):
         from .config import cli
         sys.exit(cli(args[1:]))
     if args and args[0] == "skill":
-        print(_skill_text(), end="")
+        _write_utf8(_skill_text())
         return
     if args or sys.stdin.isatty():
         sys.exit(USAGE)

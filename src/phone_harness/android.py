@@ -690,7 +690,7 @@ CLI_USAGE = """Usage:
   phone-harness android forget NAME
   phone-harness android awake [--bg] [--no-mirror]
         keep the phone awake for a session (and mirror it if scrcpy is
-        installed); changes no phone settings — ends with rest, Ctrl-C, or
+        installed); changes no phone settings - ends with rest, Ctrl-C, or
         closing the mirror. --bg detaches.
   phone-harness android rest                     end the session; the phone sleeps
 """

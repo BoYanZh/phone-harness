@@ -1,6 +1,6 @@
 ---
 name: phone-harness
-description: "Control the user's phone — an iPhone through the Mac's iPhone Mirroring window, an Android over adb, a rented cloud Android, or a cloud iPhone over HTTPS: open apps, tap, type, swipe, read the screen."
+description: "Control the user's phone - an iPhone through the Mac's iPhone Mirroring window, an Android over adb, a rented cloud Android, or a cloud iPhone over HTTPS: open apps, tap, type, swipe, read the screen."
 ---
 
 # phone-harness
@@ -15,10 +15,10 @@ of you.
 
 | Phone | How it is reached | Eyes | Hands | Read |
 | --- | --- | --- | --- | --- |
-| **Cloud Android** — rented from Phone Harness Cloud, the user's own saved phone | `phone-harness cloud start` connects it; nothing to export | accessibility tree (exact), Vision OCR fallback on a Mac | adb `input` | Working method, then **Cloud phones** and **Android** |
-| **Cloud iPhone** — an iOS entry in the account catalog | `phone-harness cloud start` with its id, label, or `ios` when that is the only one | server-side OCR (`source: "pixels"`), from any OS | ops over HTTPS | Working method, then **Cloud iPhone** |
-| **Android on the desk** — USB or paired Wi-Fi | the harness finds it | accessibility tree (exact), Vision OCR fallback on a Mac | adb `input` | Working method, then **Android** |
-| **iPhone** — through the Mac's iPhone Mirroring window | the user connects it | screenshots + Vision OCR | HID-level CGEvents into the window | Working method, then **iPhone** |
+| **Cloud Android** - rented from Phone Harness Cloud, the user's own saved phone | `phone-harness cloud start` connects it; nothing to export | accessibility tree (exact), Vision OCR fallback on a Mac | adb `input` | Working method, then **Cloud phones** and **Android** |
+| **Cloud iPhone** - an iOS entry in the account catalog | `phone-harness cloud start` with its id, label, or `ios` when that is the only one | server-side OCR (`source: "pixels"`), from any OS | ops over HTTPS | Working method, then **Cloud iPhone** |
+| **Android on the desk** - USB or paired Wi-Fi | the harness finds it | accessibility tree (exact), Vision OCR fallback on a Mac | adb `input` | Working method, then **Android** |
+| **iPhone** - through the Mac's iPhone Mirroring window | the user connects it | screenshots + Vision OCR | HID-level CGEvents into the window | Working method, then **iPhone** |
 
 `phone-harness config` shows the default platform (`ios` on a Mac, `android`
 elsewhere) and every other setting. `phone-harness cloud` shows whether a cloud
@@ -26,8 +26,8 @@ phone is attached; while one is, scripts drive it regardless of the config
 default. `PHONE_HARNESS_PLATFORM=android` overrides per call. On a cloud
 iPhone any explicit platform selects a local backend; see **Cloud iPhone**.
 
-**When not to use any of them:** if the task is doable on the Mac or the web —
-a website, an API, an app with a web equivalent — do it there and leave the
+**When not to use any of them:** if the task is doable on the Mac or the web -
+a website, an API, an app with a web equivalent - do it there and leave the
 phone alone. Use a phone when the task genuinely needs one: phone-only apps,
 things tied to a phone number or 2FA, checking how something looks on a phone.
 
@@ -48,16 +48,16 @@ PY
 - **Tell the user what you are doing as you go.** A phone task is many short
   scripts and the user sees none of them: one line before each script (what
   you are about to do), one line after (what you saw). Never run two scripts
-  in a row in silence. The `# task:`/`# step:` comments are not this — the user
+  in a row in silence. The `# task:`/`# step:` comments are not this - the user
   cannot see them.
 - **Read with `ocr()`, not by eyeballing screenshots.** Every visible string
   comes back with a tap-ready centre: `[{text, confidence, source, x, y, w, h}]`.
   Filter in Python before printing. `tap_text("Weather")` taps by label and,
-  on failure, raises with what IS visible — read the exception before retrying.
+  on failure, raises with what IS visible - read the exception before retrying.
   `screenshot()` costs more but shows what OCR cannot: icons, images, state.
 - **Act, verify, adapt.** There is no DOM to assert against and no return value
   that means "it worked", so:
-  1. Name what should change before you act — a title, a row, a field's
+  1. Name what should change before you act - a title, a row, a field's
      contents. Most phone failures are silent no-ops; if you cannot name the
      expected change you cannot tell success from one.
   2. Do one thing, then check that one thing: `wait_for_text("Got it")`,
@@ -70,17 +70,17 @@ PY
   5. Keep what you learn in `agent-workspace/agent_helpers.py`.
 - **The harness reports, you decide.** Helpers return observations, never a
   verdict on your intent. Diff two `ocr()` sets, watch one label, count rows,
-  poll until something appears — whatever matches what you asked for.
+  poll until something appears - whatever matches what you asked for.
 - **Navigation:** `home()`, `back()`, `app_switcher()`, `open_app("Notes")`,
   `type_text("...")`, `press("enter")`, `long_press(x, y)`, `tap(x, y)`.
 - **`scroll` says what you want to SEE; `swipe` says which way the finger
-  goes.** English disagrees the same way — "scroll down the page" and "swipe
+  goes.** English disagrees the same way - "scroll down the page" and "swipe
   up for the next video" describe the same motion. `scroll("down")` reveals
   what is further down; `swipe("up")` is a thumb flick, the phrasing everyone
   uses for "next". `scroll`, `scroll_screen`, `scroll_until` and
   `scroll_collect` take the content direction; only `swipe` takes finger
   motion. `"left"`/`"right"` work on both. Which one moves what differs per
-  phone — see each section.
+  phone - see each section.
 - **Walking a list:** `scroll_until(done)` stops when your predicate on the
   visible boxes is met; `scroll_collect(extract, key=...)` walks and de-dupes,
   returning `{items, stop, scrolls}` with `stop` of `'reached-end'` or
@@ -99,13 +99,13 @@ PY
 - **Connection is the user's job.** Pairing, unlocking, tapping Allow,
   locking an iPhone that says "iPhone in Use", approving a cloud sign-in in
   the browser: when the harness says the phone is not reachable, relay its
-  message and ask — never tap through a Connect screen and never loop-poll.
+  message and ask - never tap through a Connect screen and never loop-poll.
   Retry once after the user says it is done.
 
 ## Cloud phones
 
 There are two things. A **phone** is a row in the account catalog (`GET /me`
-→ `available`): a label, a platform, an id, and whether it is a temporary
+-> `available`): a label, a platform, an id, and whether it is a temporary
 phone. The service keeps no default phone; a preference is the chooser's. A **session** is one of those phones rented right now.
 `cloud ls` prints one row per catalog phone and writes any live session on
 that row (`*` is the session this process targets). A running session that
@@ -114,7 +114,7 @@ matches no row is still listed.
 `cloud start` with no name starts this machine's `cloud.phone` setting
 (`config set cloud.phone "Desk phone"`) when one is set; otherwise it sends
 no `platform` or `kind` and gets the service's rule for an unnamed start
-(`GET /me` → `unnamed`): a temporary Android. A name is a catalog id
+(`GET /me` -> `unnamed`): a temporary Android. A name is a catalog id
 or label, or `ios` / `android` when only one entry has that platform. Several
 matches print the catalog and stop (a terminal may ask which one). The CLI
 turns the chosen row into `platform` and `kind`, plus `device_id` for an
@@ -203,7 +203,7 @@ The mirroring section describes a Mac window. This phone is the HTTPS path.
 The client posts `{"op", "kw"}` to `<control url>/op` and reads the host's
 list from `GET <control url>/ops` (`remote.py`). `supports(op)` is that list.
 `send` of an op the host did not list raises `Unsupported` before the POST
-(`this cloud phone cannot '…'`). The op names and the shapes below are the
+(`this cloud phone cannot '...'`). The op names and the shapes below are the
 client vocabulary in `transport.py`. Result shapes are what this repo
 documents or decodes.
 
@@ -244,7 +244,7 @@ Trust `GET /ops` when the host's list is shorter than this table.
   PNG** so a point you read off a screenshot can become a tap. If
   `screen_info()` raises `ModuleNotFoundError: No module named 'Quartz'`,
   that helper imported the macOS Vision module to read the PNG's pixel size.
-  `ocr()` sends `screen.text` to the host and still works — keep using
+  `ocr()` sends `screen.text` to the host and still works - keep using
   `tap_text()`. If `screen_info()` returns `img_px`, those three helpers work
   on any OS. [PR #108](https://github.com/ShawnPana/phone-harness/pull/108)
   ("screen_info() no longer needs macOS") is the change that reads the PNG
@@ -274,8 +274,8 @@ Trust `GET /ops` when the host's list is shorter than this table.
 
 ## Android
 
-The phone is reached over adb — a USB phone if plugged in, else the paired
-Wi-Fi phone, else the attached cloud Android — so there is nothing to select.
+The phone is reached over adb - a USB phone if plugged in, else the paired
+Wi-Fi phone, else the attached cloud Android - so there is nothing to select.
 `phone-harness android` shows known phones and what is attached.
 
 ```bash
@@ -286,11 +286,11 @@ PY
 ```
 
 - **Coordinates are device pixels;** the screenshot is 1:1 with `tap(x, y)`.
-- **`ocr()` is the accessibility tree** (`source: "tree"`) — exact, no
+- **`ocr()` is the accessibility tree** (`source: "tree"`) - exact, no
   misreads. Prefer `ui()` / `find_nodes()` / `tap_ui()`: they also see
   elements with no visible text (icons with a content-description, fields by
   resource-id like `tap_ui("url_bar")`).
-- **Some screens never give up their tree** — a playing video, some Settings
+- **Some screens never give up their tree** - a playing video, some Settings
   pages. On a Mac, `ocr()` then reads the screenshot with Vision instead
   (`source: "pixels"`, fuzzier, still tap-ready; the first read costs ~12s
   while uiautomator gives up, later reads are fast). Elsewhere it raises
@@ -301,12 +301,12 @@ PY
   360 640")`, `shell("input keyevent KEYCODE_BACK")`, `shell("am start -n
   pkg/.Activity")`, `shell("dumpsys notification --noredact")`, `shell("pm list
   packages -3")`. The input helpers are one-line wrappers over the same
-  commands — use whichever you think in. What the harness adds: finding and
+  commands - use whichever you think in. What the harness adds: finding and
   reconnecting the phone, and the screen as a short list instead of XML.
 - **`scroll` and `swipe` are different gestures here.** `scroll` moves the
   content and stops: no momentum, the same distance every time, so use it (and
   `scroll_until` / `scroll_collect`) to walk a list without skipping rows.
-  `swipe` is a flick and coasts past whatever was next — right for "next
+  `swipe` is a flick and coasts past whatever was next - right for "next
   video" or changing pages, wrong for reading a list.
 - `open_app("TikTok")` takes the name a person would say, a package id, or a
   fragment of one, and returns the package it launched; when nothing matches,
@@ -315,7 +315,7 @@ PY
 - `press()` takes single keys only (`"enter"`, `"back"`, `"tab"`); chords
   raise Unsupported. `type_text` types ASCII: adb cannot type emoji or
   accented letters.
-- **Verify cheaply, then read.** adb reports nothing about outcomes — a tap on
+- **Verify cheaply, then read.** adb reports nothing about outcomes - a tap on
   empty space "succeeds". After an action: `wait_for_app(...)` (~0.1s a poll)
   or `wait_for_text(...)` (returns the box or None), then `ui()`/`ocr()` once.
   The tree costs ~2-3s a call on a slow phone and a screenshot ~0.5s, so
@@ -325,13 +325,13 @@ PY
   `interruption(before, after)` always reports nothing disturbed.
 - **A desk phone locks itself** after its screen timeout. `connection_state()`
   reports `locked`; taps and `ocr()` refuse with the same message. Ask the user
-  to unlock — never type a PIN. `screenshot()` still works locked, so you can
+  to unlock - never type a PIN. `screenshot()` still works locked, so you can
   show them what you see. For a task longer than a minute, ask the user, then
   `phone-harness android awake --bg` keeps it awake without changing any phone
   setting; `phone-harness android rest` ends that. Cloud phones do not lock.
 - Connecting a desk phone is the user's job (USB debugging + Allow, or
   Wireless debugging + `phone-harness android pair CODE`); on `no-device` the
-  error names the missing step — relay it, don't retry-loop.
+  error names the missing step - relay it, don't retry-loop.
 
 ## iPhone (iPhone Mirroring)
 
@@ -342,7 +342,7 @@ events into it for hands. All coordinates are global macOS screen points.
 - `ensure_mirroring()` launches the window and gates on connection. The
   default build works the phone **without taking the user's focus**: capture
   is by window id and taps and keystrokes are event records delivered straight
-  to the app. Scrolling is the exception — macOS routes a scroll to whichever
+  to the app. Scrolling is the exception - macOS routes a scroll to whichever
   window sits under the pointer, so a scroll raises the mirroring window for
   the length of the gesture and hands focus straight back. Expect a brief
   flicker on scrolls and nothing on anything else. `PHONE_HARNESS_BACKGROUND=0`
@@ -354,7 +354,7 @@ events into it for hands. All coordinates are global macOS screen points.
   from the current `screen_info()`; never estimate the window offset.
 - **Use `scroll` for anything scrollable.** On macOS 26 a vertical touch-drag
   is dropped, so `swipe("up")`/`swipe("down")` move nothing in a list or a
-  feed — measured on Settings and on TikTok. Horizontal still works, so
+  feed - measured on Settings and on TikTok. Horizontal still works, so
   `swipe("left")` / `swipe("right")` remain the way to flip Home Screen pages
   and carousels, which a scroll cannot do. (Breaking change: `scroll` used to
   take finger motion too, so the old `scroll("up")` is today's
@@ -375,12 +375,12 @@ events into it for hands. All coordinates are global macOS screen points.
   Never tap `Connect` / `Continue` and never loop-poll: tapping Connect while
   the phone is unlocked does nothing, and the only fix is the user locking or
   connecting the phone. **Unlocking the physical phone pauses the session**
-  ("iPhone in Use") — do not tap through the resume screen.
-- **Unfocused input is swallowed silently — for events you post yourself.**
+  ("iPhone in Use") - do not tap through the resume screen.
+- **Unfocused input is swallowed silently - for events you post yourself.**
   The helpers are immune in the background build, but raw CGEvents and the
   `PHONE_HARNESS_BACKGROUND=0` path need the window frontmost: `activate()`
   before posting, and re-activate if a click steals focus. The failure looks
-  exactly like "scrolling is broken" or "the list already ended" — when a
+  exactly like "scrolling is broken" or "the list already ended" - when a
   gesture changes nothing on screen, check focus before inventing another
   theory.
 - **The window is a video stream.** macOS accessibility sees nothing inside
@@ -390,7 +390,7 @@ events into it for hands. All coordinates are global macOS screen points.
 - Mouse taps map to touches 1:1, but there is no multi-touch: no pinch, no
   two-finger gestures.
 - Raw Quartz is the escape hatch: `import Quartz` in your script for anything
-  the helpers don't cover — but raw CGEvents don't ride the helpers' delivery
+  the helpers don't cover - but raw CGEvents don't ride the helpers' delivery
   path, and where they land is its own question per event type. Check what
   actually happened on screen rather than assuming the event arrived.
 
