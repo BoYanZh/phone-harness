@@ -1,10 +1,9 @@
 # phone-harness for Hermes Agent
 
 A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that lets
-Hermes drive a real phone with one tool, `phone_exec`. It has the same shape as
-Hermes's own `browser_exec`: the model writes a short Python script with the
-phone-harness helpers pre-imported, and the plugin runs it on the phone and
-returns what it printed.
+Hermes drive a real phone with one tool, `phone_exec`. The model writes a short
+Python script with the phone-harness helpers pre-imported, and the plugin runs
+it on the phone and returns what it printed.
 
 ```text
 phone_exec(code='''
@@ -15,9 +14,11 @@ print([o["text"] for o in ocr()][:12])
 ''')
 ```
 
-It also registers phone-harness's [SKILL.md](../../SKILL.md) as the skill
-`phone-harness:phone-harness`, so the agent knows how to read the screen, act
-and verify before its first script.
+When the installed `phone_harness` package contains `SKILL.md`, the plugin
+registers that file as the skill `phone-harness:phone-harness`, and passes
+Hermes the description and frontmatter from the file (Hermes does not re-read
+them for the skill list). If the package does not ship `SKILL.md`, no skill is
+registered. The agent reads the helpers from that skill.
 
 ## Install
 
@@ -25,31 +26,28 @@ and verify before its first script.
 hermes plugins install ShawnPana/phone-harness/integrations/hermes
 ```
 
-Hermes asks to install the `phone-harness` package into its environment and
+Hermes installs the `phone-harness` package into its own environment and asks
 whether to enable the plugin. Tools load per session, so start a new chat.
+Each script runs as `python -m phone_harness.run` on Hermes's interpreter: the
+copy Hermes installed, kept apart from a `phone-harness` command on `PATH`.
 
-Then pick the phone. On a Mac with iPhone Mirroring paired:
-
-```bash
-hermes config set plugins.entries.phone-harness.settings.platform ios
-```
-
-iPhone control needs Accessibility and Screen Recording for the app that runs
-Hermes (the Hermes desktop app, or your terminal for `hermes` in a shell), not
-only for the terminal you use phone-harness from. Android needs adb; a cloud
-phone needs `phone-harness cloud login`. [install.md](../../install.md) covers
-each.
+phone-harness chooses the phone (an attached cloud phone, otherwise its
+default). To force the phone on this machine, export `PHONE_HARNESS_PLATFORM`
+as `ios` or `android` in the environment Hermes runs in. iPhone control needs
+Accessibility and Screen Recording for the app that runs Hermes (the Hermes
+desktop app, or your terminal for `hermes` in a shell). Android needs adb; a
+cloud phone needs `phone-harness cloud login`. [install.md](../../install.md)
+covers each.
 
 ## Settings
 
-Desktop: **Settings → Plugins → phone-harness**. CLI:
-`hermes config set plugins.entries.phone-harness.settings.<key> <value>`.
+This plugin has no settings of its own.
 
-| Key | Default | What it does |
-|---|---|---|
-| `platform` | `auto` | `auto` lets phone-harness choose (an attached cloud phone, else its default). `ios` or `android` drives the phone on this machine on purpose, which is also what phone-harness requires after a rented cloud phone has gone. |
-| `telemetry` | `false` | Off: scripts run with `PHONE_HARNESS_TELEMETRY=0`. On: phone-harness's own telemetry setting applies. |
-| `agent_workspace` | empty | Folder with `agent_helpers.py`, passed as `PH_AGENT_WORKSPACE`. Empty: `~/.phone-harness/agent-workspace` if that checkout exists, else a folder in Hermes's plugin data. |
+- Telemetry follows phone-harness's own config.
+- `PHONE_HARNESS_PLATFORM`, when you have exported it, is passed through.
+- The agent workspace is one folder, `agent-workspace`, in Hermes's plugin
+  data directory. If `PH_AGENT_WORKSPACE` is already set, that path is used
+  instead. Each script receives it as `PH_AGENT_WORKSPACE`.
 
 ## How it works
 
@@ -57,14 +55,11 @@ Desktop: **Settings → Plugins → phone-harness**. CLI:
 2. A `pre_tool_call` hook reads the script. Phone helpers and plain data
    handling go straight through. A script that reaches past the phone goes to
    Hermes's approval prompt first (see below).
-3. The plugin waits for the phone: one script at a time, across subagents and
-   across Hermes processes (Desktop, CLI, cron), via a lock file in Hermes's
-   plugin data. After 120 s it reports the phone as busy.
-4. It pipes the script on stdin to `phone-harness`: your own CLI when it is on
-   `PATH` or in `~/.local/bin`, else the copy Hermes installed, run on Hermes's
-   interpreter. The script runs in the agent workspace with
-   `PH_AGENT_WORKSPACE`, `PH_CLIENT=hermes`, the `platform` setting and, unless
-   you opted in, `PHONE_HARNESS_TELEMETRY=0`.
+3. Subagents in this process take turns on the phone, via an in-process lock.
+   After 120 s the tool reports the phone as busy.
+4. The plugin pipes the script on stdin to the phone-harness Hermes installed,
+   with `PH_AGENT_WORKSPACE` and `PH_CLIENT=hermes`. It does not set a platform
+   and does not turn telemetry off.
 5. The result is what the script printed, plus the exit code, the tail of
    stderr, and any screenshot paths it printed (the agent opens those with
    `vision_analyze`). A script past its timeout is killed with everything it
@@ -88,7 +83,7 @@ to ask before sending, posting, buying, deleting or changing settings.
 
 ## What it touches
 
-- Runs model-written Python locally through the phone-harness CLI.
+- Runs model-written Python locally through the phone-harness Hermes installed.
 - Taps and types into your real phone, with your apps and accounts.
 - Screenshots are PNG files in the system temp folder.
 - A cloud phone streams its screen to Phone Harness Cloud, bills by the minute,
