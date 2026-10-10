@@ -12,7 +12,6 @@ Unsupported here, exactly as a local backend would.
 """
 import base64
 import json
-import os
 import tempfile
 import urllib.error
 import urllib.request
@@ -28,13 +27,6 @@ class Remote(Backend):
     name = "remote"
 
     def __init__(self, url, token):
-        # A private instance reached through a port-forward: the control URL
-        # names the public origin, and PHONE_HARNESS_CLOUD_CONTROL_BASE moves
-        # the path onto the forwarded one. Unset, the URL is used as given.
-        base = os.environ.get("PHONE_HARNESS_CLOUD_CONTROL_BASE")
-        parts = url.split("/", 3)
-        if base and len(parts) == 4:
-            url = base.rstrip("/") + "/" + parts[3]
         self.url = url.rstrip("/")
         self.token = token
         self._ops = None
@@ -46,8 +38,6 @@ class Remote(Backend):
         headers = {"Authorization": f"Bearer {self.token}", "User-Agent": USER_AGENT}
         if data:
             headers["Content-Type"] = "application/json"
-        from .cloud import gate_headers     # the same gate the API sits behind
-        headers.update(gate_headers())
         req = urllib.request.Request(self.url + path, data=data, method=method, headers=headers)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:

@@ -39,7 +39,6 @@ class FakeCloud(BaseHTTPRequestHandler):
     sessions, profile, polls, posts = {}, {}, {}, []
     valid, token_polls, refreshes, revoked = set(), 0, 0, []
     closing_reads = 0
-    seen_headers = []
     forbid = False
     control_url = None            # set: an iPhone's control grant points here
     available = None              # set: GET /me includes `available`
@@ -88,7 +87,6 @@ class FakeCloud(BaseHTTPRequestHandler):
         path, m = self.path.split("?")[0], self.command
         if path.startswith("/oauth/"):
             return self._oauth(path, dict(urllib.parse.parse_qsl(raw.decode())))
-        c.seen_headers.append(dict(self.headers))
         if self.headers.get("Authorization", "")[7:] not in c.valid:
             return self._send(401, {"error": "unauthorized"})
         body = json.loads(raw) if raw else {}
@@ -314,15 +312,6 @@ class CloudCli(unittest.TestCase):
                                  "PHONE_HARNESS_CLOUD_API='http://127.0.0.1:1'\n")   # loses to the real env
         r = self.run_cli("cloud", "whoami", env={"PH_AGENT_WORKSPACE": str(ws)})
         self.assertIn("a@b.c", r.stdout, r.stderr)
-
-    def test_a_gate_header_rides_along_on_every_request(self):
-        FakeCloud.valid.add("pck_ci")
-        FakeCloud.seen_headers = []
-        r = self.run_cli("cloud", "whoami", env={"PHONE_HARNESS_API_KEY": "pck_ci",
-                                                  "PHONE_HARNESS_CLOUD_GATE_HEADER": "X-Gate-Authorization: Bearer gate-1"})
-        self.assertIn("a@b.c", r.stdout)
-        self.assertIn("Bearer gate-1", [h.get("X-Gate-Authorization") for h in FakeCloud.seen_headers])
-        self.assertNotIn("gate-1", r.stdout)
 
     def test_an_api_key_in_the_environment_is_used_for_ci(self):
         FakeCloud.valid.add("pck_ci")
@@ -674,20 +663,6 @@ class CloudCli(unittest.TestCase):
         self.assertEqual(len(FakeCloud.posts), 2)          # attached to the Android; no third phone
         self.assertIn("your phone", back.stdout)
         self.assertNotIn("your iPhone", back.stdout)
-
-
-class ControlBase(unittest.TestCase):
-    def test_rewrites_the_control_url_only_when_asked(self):
-        from phone_harness.remote import Remote
-        os.environ.pop("PHONE_HARNESS_CLOUD_CONTROL_BASE", None)
-        self.assertEqual(Remote("https://public.example/phones/abc", "t").url,
-                         "https://public.example/phones/abc")
-        os.environ["PHONE_HARNESS_CLOUD_CONTROL_BASE"] = "http://127.0.0.1:9"
-        try:
-            self.assertEqual(Remote("https://public.example/phones/abc", "t").url,
-                             "http://127.0.0.1:9/phones/abc")
-        finally:
-            os.environ.pop("PHONE_HARNESS_CLOUD_CONTROL_BASE", None)
 
 
 if __name__ == "__main__":
