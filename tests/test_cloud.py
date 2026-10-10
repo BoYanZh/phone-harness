@@ -16,6 +16,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 SRC = str(Path(__file__).resolve().parents[1] / "src")
+SUPPORT = str(Path(__file__).resolve().parent / "support")
+if SRC not in sys.path:
+    sys.path.insert(0, SRC)
+if SUPPORT not in sys.path:
+    sys.path.insert(0, SUPPORT)
+import browser_recorder
+browser_recorder.install()
 
 FAKE_ADB = r'''#!/bin/sh
 # Locked until `shell unlock CODE`; state is a file next to this script.
@@ -275,14 +282,16 @@ class CloudCli(unittest.TestCase):
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
-        self.env = {**os.environ, "PYTHONPATH": SRC, "PHONE_HARNESS_HOME": self.home.name,
+        self.env = {**os.environ, "PYTHONPATH": SUPPORT + os.pathsep + SRC,
+                    "PHONE_HARNESS_HOME": self.home.name,
                     "PHONE_HARNESS_ADB": str(adb), "PHONE_HARNESS_TELEMETRY": "0",
                     "PHONE_HARNESS_CLOUD_API": f"http://127.0.0.1:{self.server.server_port}",
                     "PHONE_HARNESS_CLOUD_OAUTH_ISSUER": f"http://127.0.0.1:{self.server.server_port}",
                     "PHONE_HARNESS_CLOUD_OAUTH_CLIENT_ID": "cli-client"}
         for name in ("PHONE_HARNESS_API_KEY", "ANDROID_SERIAL", "PHONE_HARNESS_PLATFORM",
-                     "PHONE_HARNESS_SESSION"):
+                     "PHONE_HARNESS_SESSION", "BROWSER"):
             self.env.pop(name, None)
+        browser_recorder.recorder.reset()
 
     def run_cli(self, *args, stdin=None, env=None):
         return subprocess.run([sys.executable, "-m", "phone_harness.run", *args], input=stdin,
@@ -371,26 +380,21 @@ class CloudCli(unittest.TestCase):
 
     def test_start_opens_the_live_view_unless_told_not_to(self):
         self.login()
-        opened = Path(self.home.name) / "opened-urls"
-        # a fake browser: `webbrowser` honours $BROWSER, so point it at a script that records the url
-        fake = Path(self.home.name) / "browser"
-        fake.write_text(f'#!/bin/sh\necho "$1" >> "{opened}"\n')
-        fake.chmod(0o755)
-        r = self.run_cli("cloud", "start", env={"BROWSER": str(fake)})
+        r = self.run_cli("cloud", "start")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("opened in your browser", r.stdout)
-        self.assertEqual(opened.read_text().strip(), "https://watch.example/secret")
+        self.assertEqual(browser_recorder.recorder.urls(), ["https://watch.example/secret"])
         self.assertNotIn("watch.example", r.stdout)            # the url itself is never printed
-        again = self.run_cli("cloud", "start", env={"BROWSER": str(fake)})   # reattach: no second tab
-        self.assertEqual(len(opened.read_text().split()), 1, again.stdout)
+        again = self.run_cli("cloud", "start")                 # reattach: no second tab
+        self.assertEqual(browser_recorder.recorder.urls(), ["https://watch.example/secret"], again.stdout)
         self.run_cli("cloud", "stop")
-        r = self.run_cli("cloud", "start", "--no-watch", env={"BROWSER": str(fake)})
+        r = self.run_cli("cloud", "start", "--no-watch")
         self.assertIn("phone-harness cloud watch", r.stdout)
-        self.assertEqual(len(opened.read_text().split()), 1)
+        self.assertEqual(browser_recorder.recorder.urls(), ["https://watch.example/secret"])
         self.run_cli("cloud", "stop")
-        r = self.run_cli("cloud", "start", env={"BROWSER": str(fake), "PHONE_HARNESS_CLOUD_WATCH": "0"})
+        r = self.run_cli("cloud", "start", env={"PHONE_HARNESS_CLOUD_WATCH": "0"})
         self.assertIn("phone-harness cloud watch", r.stdout)
-        self.assertEqual(len(opened.read_text().split()), 1)
+        self.assertEqual(browser_recorder.recorder.urls(), ["https://watch.example/secret"])
 
     def test_open_is_the_dashboard_not_the_watch_link(self):
         self.login()
