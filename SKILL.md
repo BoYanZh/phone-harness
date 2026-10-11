@@ -175,6 +175,20 @@ phone-harness cloud open                     # the dashboard: the user takes the
 - **`cloud phone` is the saved Android only** (`GET /me/profile`).
   `cloud phone reset --yes` wipes that phone's stored state: apps, logins,
   and data. The CLI has no iPhone reset; that is the operator's.
+- **A cloud session that ends does not hand you another phone.** If the
+  session attached to this script expires, the error says `session <sid> expired`.
+  If the service loses it, the error says the cloud phone failed and is
+  unreachable. Either way the script stops. It does not drive the personal
+  phone, and the CLI does not rent a replacement. Start the same catalog
+  phone again with a longer duration and continue the task:
+  `phone-harness cloud start <same phone> --for <longer>`. `<same phone>` is
+  that phone's id or label (or `ios` / `android` when only one entry has that
+  platform). `<longer>` is a duration longer than the session that just
+  ended (`90s`, `15m`, or a number of minutes). A `--session` pin whose
+  session expired is the same error, naming that sid. A missing cloud state
+  file still means no cloud phone was attached, and the personal phone is
+  used as today. An unreadable state file is an error, not a cue to switch
+  phones. `cloud stop` clears the failure; a new `cloud start` does too.
 - The adb address the CLI shows is not a secret; the unlock code is. Do not
   look for it, print it, or ask the user for it.
 
@@ -332,6 +346,11 @@ PY
 - Connecting a desk phone is the user's job (USB debugging + Allow, or
   Wireless debugging + `phone-harness android pair CODE`); on `no-device` the
   error names the missing step - relay it, don't retry-loop.
+- **A saved primary that is unreachable is a failure, not a different phone.**
+  If `phone-harness android use` has named a primary and that phone cannot
+  be reached, the error says the primary is unreachable. Do not expect the
+  harness to connect some other paired or mDNS phone instead. When no
+  primary is configured, a USB phone that is plugged in is still used.
 
 ## iPhone (iPhone Mirroring)
 

@@ -38,6 +38,14 @@ LOW_TIME = 120        # warn the script when the session has less than this left
 USER_AGENT = "phone-harness-cli"
 
 
+class CloudPhoneError(RuntimeError):
+    """A cloud phone was attached and cannot be driven.
+
+    Callers must surface this. Returning None would look like no cloud phone
+    was ever attached, and the next line of code would drive a different one.
+    """
+
+
 class CloudError(RuntimeError):
     def __init__(self, status, body, headers=None):
         self.status = status
@@ -88,7 +96,31 @@ def _state_path():
 
 
 def _load_state():
-    return config._read(_state_path(), {})
+    """The cloud state file, or {} when this machine has never had one.
+
+    A file that exists but cannot be read is an error. Treating it as empty
+    would drop the attached session and let a script drive some other phone.
+    """
+    path = _state_path()
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return {}
+    except OSError as e:
+        raise CloudPhoneError(
+            f"the cloud state file {path} is unreadable ({e}). "
+            "This did not fall back to another phone.") from None
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        raise CloudPhoneError(
+            f"the cloud state file {path} is unreadable ({e}). "
+            "This did not fall back to another phone.") from None
+    if not isinstance(data, dict):
+        raise CloudPhoneError(
+            f"the cloud state file {path} is unreadable (not an object). "
+            "This did not fall back to another phone.")
+    return data
 
 
 def _save_state(state):
@@ -285,6 +317,93 @@ def _find_recorded(state, pin):
     return hits[0] if len(hits) == 1 else None
 
 
+def _expired(sess):
+    return bool(sess and sess.get("expires_at") and time.time() >= sess["expires_at"])
+
+
+def _pin_hits(sid, pin):
+    return bool(sid and pin and (sid == pin or str(sid).startswith(pin)))
+
+
+def _quote_arg(name):
+    if name and all(c.isalnum() or c in "_.:+@-" for c in name):
+        return name
+    return '"' + str(name).replace('"', "") + '"'
+
+
+def _start_target(rec):
+    """The catalog name a later `cloud start` uses for this same phone.
+
+    None means a bare `cloud start` (the unnamed choice). A label or id is
+    what the catalog command accepts; `ios` / `android` only when that is
+    all we still know.
+    """
+    rec = rec or {}
+    sel = rec.get("selector") or ""
+    if sel == "unnamed":
+        return None
+    label = str(rec.get("label") or "").strip()
+    if label:
+        return _quote_arg(label)
+    device = str(rec.get("device_id") or "").strip()
+    if device:
+        return _quote_arg(device)
+    if sel.startswith("id:") and sel[3:].strip():
+        return _quote_arg(sel[3:].strip())
+    if sel.startswith("label:") and sel[6:].strip():
+        return _quote_arg(sel[6:].strip())
+    if sel == "temporary":
+        return None
+    platform = rec.get("platform")
+    if platform in ("ios", "android"):
+        return platform
+    return None
+
+
+def restart_command(rec):
+    """`cloud start` of the same phone, for a longer duration than the one that ended."""
+    target = _start_target(rec)
+    if target:
+        return f"phone-harness cloud start {target} --for <longer>"
+    return "phone-harness cloud start --for <longer>"
+
+
+def _ended_record(rec, cause, at=None):
+    rec = rec or {}
+    return {
+        "sid": rec.get("sid"),
+        "platform": rec.get("platform"),
+        "label": rec.get("label"),
+        "device_id": rec.get("device_id"),
+        "selector": rec.get("selector"),
+        "expires_at": rec.get("expires_at"),
+        "cause": cause,
+        "at": time.time() if at is None else at,
+    }
+
+
+def ended_message(rec):
+    """What a script should show, and the one next command.
+
+    Expiry is named `expired`. Anything else (the service lost the session,
+    the state file says it is gone) is named `failed` and `unreachable`.
+    The CLI does not rent a replacement itself.
+    """
+    rec = rec or {}
+    cause = "expired" if rec.get("cause") == "expired" or _expired(rec) else "unreachable"
+    sid = rec.get("sid") or "unknown"
+    if cause == "expired":
+        lead = f"session {sid} expired"
+    else:
+        lead = f"session {sid} failed: the cloud phone is unreachable"
+    cmd = restart_command(rec)
+    return (f"{lead}. This script did not switch to another phone. "
+            f"Start the same phone again for longer and continue the task: `{cmd}`. "
+            "Replace <longer> with a duration longer than the session that just ended "
+            "(`90s`, `15m`, or a number of minutes). "
+            "The CLI does not rent a phone by itself.")
+
+
 def attached(kind=None):
     """The session the helpers should drive, or None; with `kind`, only a
     session reached that way.
@@ -292,28 +411,34 @@ def attached(kind=None):
     `PHONE_HARNESS_SESSION` (or `--session`, which sets it) pins one session
     for this process, so parallel agents do not share the state file's
     fallback. With neither, the fallback is the attached session a person at
-    a terminal last started or `cloud use`d. The unpinned read does no
-    network and never raises. A pin that is not on disk is fetched once."""
-    try:
-        state = _load_state()
-    except Exception:
-        state = {}
+    a terminal last started or `cloud use`d. A pin that is not on disk is
+    fetched once.
+
+    None means no cloud phone was attached. A pin whose session has expired
+    raises `session <sid> expired` instead of returning None, and an
+    unreadable state file raises too: both used to look like "no cloud phone"
+    and the next call drove a different device. An unpinned session whose
+    clock has run out still returns None; `lost()` tells `connect` to raise.
+    """
+    state = _load_state()
     pin = os.environ.get("PHONE_HARNESS_SESSION")
     if pin:
         raw = _find_recorded(state, pin)
         sess = _as_linked(raw)
         if sess is None:
+            gone = state.get("gone")
+            if isinstance(gone, dict) and _pin_hits(gone.get("sid"), pin):
+                raise CloudPhoneError(ended_message(gone))
             sess = _pull_pinned(pin)
+        if _expired(sess):
+            raise CloudPhoneError(ended_message(_ended_record(sess, "expired")))
     else:
-        try:
-            sess = _as_linked(state.get("session"))
-        except Exception:
-            return None
+        sess = _as_linked(state.get("session"))
     if sess is None:
         return None
     if kind not in (None, sess["link"]["kind"]):
         return None
-    if sess.get("expires_at") and time.time() >= sess["expires_at"]:
+    if _expired(sess):
         return None
     return sess
 
@@ -426,7 +551,8 @@ def _session_record(session, selector=None, label=None):
 def _store_session(record, make_attached=True):
     """Remember a session. `make_attached` updates the terminal fallback.
     Every remembered session stays addressable by `--session`, so a later
-    start does not forget the previous phone."""
+    start does not forget the previous phone. Storing one clears a previous
+    "gone" mark: the user has a phone again."""
     state = _load_state()
     sessions = _known_sessions(state)
     sessions[record["sid"]] = record
@@ -435,6 +561,7 @@ def _store_session(record, make_attached=True):
         state["session"] = record
     if make_attached and record.get("profile"):
         state["profile_id"] = record["profile"]
+    state.pop("gone", None)
     _save_state(state)
     if record["link"]["kind"] == "adb":
         ensure_connected(record, quiet=True)
@@ -469,7 +596,15 @@ def _pull_pinned(pin):
     return _store_session(_session_record(session), make_attached=False)
 
 
-def _detach(sid=None):
+def _detach(sid=None, gone=False):
+    """Forget a remembered session.
+
+    `gone=True` means the service lost the attached one (it failed, or it
+    expired) rather than the user ending it. That session is remembered
+    under "gone" so the helpers refuse to run instead of driving the phone
+    on this machine. A plain detach (the user's `cloud stop`) clears that
+    too. Other remembered sessions stay addressable by `--session`.
+    """
     state = _load_state()
     sessions = _known_sessions(state)
     current = state.get("session") if isinstance(state.get("session"), dict) else None
@@ -478,6 +613,7 @@ def _detach(sid=None):
         sids = [targeted["sid"]] if targeted and targeted.get("sid") else []
     else:
         sids = [sid]
+    removed_attached = None
     for target in sids:
         rec = _as_linked(sessions.get(target))
         if rec is None and current and current.get("sid") == target:
@@ -490,13 +626,36 @@ def _detach(sid=None):
                 pass
         sessions.pop(target, None)
         if current and current.get("sid") == target:
+            if gone:
+                removed_attached = rec or current
             state.pop("session", None)
             current = None
     if sessions:
         state["sessions"] = sessions
     else:
         state.pop("sessions", None)
+    if gone and removed_attached:
+        cause = "expired" if _expired(removed_attached) else "unreachable"
+        state["gone"] = _ended_record(removed_attached, cause)
+    if not gone:
+        state.pop("gone", None)
     _save_state(state)
+
+
+def lost():
+    """A session that was attached and is no longer usable, or None.
+
+    Either the service said it was gone, or its expiry passed while it was
+    still attached. `cause` is `expired` or `unreachable`. No network. An
+    unreadable state file raises; it is not "no session"."""
+    state = _load_state()
+    gone = state.get("gone")
+    if isinstance(gone, dict) and gone.get("sid"):
+        return gone
+    sess = state.get("session") if isinstance(state.get("session"), dict) else None
+    if _expired(sess):
+        return _ended_record(sess, "expired", at=sess.get("expires_at"))
+    return None
 
 
 # --- small things ------------------------------------------------------------
@@ -852,6 +1011,8 @@ def _reusable(selector):
     still provisioning or ready. None when this start should create one."""
     try:
         state = _load_state()
+    except CloudPhoneError:
+        raise
     except Exception:
         return None
     seen = set()
@@ -948,6 +1109,8 @@ def _start(args):
     # Another session may keep running. Say so, and how to aim at it again.
     try:
         previous = _as_linked(_load_state().get("session"))
+    except CloudPhoneError:
+        raise
     except Exception:
         previous = None
     if previous and previous.get("selector") != selector:
@@ -1068,7 +1231,11 @@ def _status(args):
     print(f"signed in   {me.get('email') or me.get('uid')}")
     print(f"credit      {_credit(me)}")
     profile = me.get("profile") or {}
-    sess = attached()
+    try:
+        sess = attached()
+    except CloudPhoneError as e:
+        print(e)
+        return 1
     live = None
     if sess:
         try:
@@ -1082,14 +1249,19 @@ def _status(args):
         profile = {**profile, "state": "saving"}
     print(f"phone       {_describe_profile(profile)}")
     if not sess:
+        lost_rec = lost()
+        if lost_rec:
+            print(ended_message(lost_rec))
+            return 1
         running = me.get("active_session_count") or 0
         print("session     none attached" + (f" ({running} running: `phone-harness cloud ls`)"
                                               if running else " — `phone-harness cloud start`"))
         return 0
     if live is None:
-        print(f"session     {sess['sid']} is gone; detaching")
-        _detach()
-        return 0
+        cause = "expired" if _expired(sess) else "unreachable"
+        print(ended_message(_ended_record(sess, cause)))
+        _detach(gone=True)
+        return 1
     state = ("closing — saving the phone"
              if live["state"] == "closing" and _keeps_state(live)
              else live["state"])
