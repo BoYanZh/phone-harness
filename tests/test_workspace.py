@@ -227,6 +227,12 @@ class PackagedWorkspace(unittest.TestCase):
     def setUpClass(cls):
         cls._tmp = tempfile.TemporaryDirectory()
         cls.out = Path(cls._tmp.name)
+        # Build with a secret-shaped .env beside the defaults, the way a
+        # developer's checkout looks. The wheel must not pack it.
+        cls._stray_env = ROOT / "agent-workspace" / ".env"
+        cls._wrote_env = not cls._stray_env.exists()
+        if cls._wrote_env:
+            cls._stray_env.write_text("PHONE_HARNESS_TOKEN=do-not-ship\n")
         r = _build_wheel(cls.out)
         if r.returncode != 0:
             cls._tmp.cleanup()
@@ -239,6 +245,8 @@ class PackagedWorkspace(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        if cls._wrote_env:
+            cls._stray_env.unlink(missing_ok=True)
         cls._tmp.cleanup()
 
     def test_the_wheel_ships_agent_workspace(self):
@@ -249,8 +257,13 @@ class PackagedWorkspace(unittest.TestCase):
             self.assertEqual(zf.read(packaged), DEFAULT_HELPERS.read_bytes())
             self.assertTrue(any(name.endswith("phone_harness/SKILL.md") or
                                 name == "phone_harness/SKILL.md" for name in names))
-            self.assertFalse(any(name.endswith("/.env") or name == ".env"
-                                 for name in names))
+
+    def test_the_wheel_packs_only_the_default_helper(self):
+        """A .env sat beside the defaults while this wheel was built."""
+        with zipfile.ZipFile(self.wheel) as zf:
+            under = [n for n in zf.namelist()
+                     if n.startswith("phone_harness/agent_workspace/")]
+        self.assertEqual(under, ["phone_harness/agent_workspace/agent_helpers.py"])
 
     def test_an_installed_wheel_seeds_without_clobbering_edits(self):
         """Install the wheel with pip --target (no venv; CI images vary) and
