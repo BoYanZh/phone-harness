@@ -247,32 +247,120 @@ class IPhone(Backend):
     def _wait_connected(self, timeout):
         """After a press: wait for the live stream, and fail fast otherwise.
 
-        'ready' has to hold for three polls in a row. Measured: the press
-        empties the window for about half a second before "Connecting to"
-        draws, and a single poll in that gap reads as live.
+        The attempt is watched through an accessibility observer on iPhone
+        Mirroring, so the Connecting screen is noticed when it changes rather
+        than on a timer. A hang emits nothing, so the wait still gives up at
+        `timeout`. If the observer cannot be installed, the same decision is
+        made by polling.
 
-        Measured timeline of a failed attempt: 0.3s blank, 0.9s "Connecting
-        to" (its only button is "Background"), 2.0s "iPhone in Use" with no
-        button at all. So once the attempt is a couple of seconds old and the
-        window is an interstitial that is not the Connecting screen, the
-        answer is known: raise now rather than sit out the timeout. The user
-        locking the phone is what fixes it, and the app reconnects by itself
-        when that happens, so the next session.require finds it live."""
+        'ready' has to hold for three evaluations in a row. Measured: the
+        press empties the window for about half a second before "Connecting
+        to" draws, and one empty read in that gap looks live.
+
+        The Connecting screen is in progress when its text contains
+        "Connecting to" or it offers a Background button. A live attempt
+        showed "Connecting to iPhone 17 Pro Max" with no button at all, and
+        treating "no Background button" as a finished failure gave up while
+        the phone was still connecting. A blocked interstitial that is not
+        that screen — "iPhone in Use", locked, timed out — is the answer once
+        the attempt has had a couple of seconds to draw, so it fails then
+        instead of sitting out the cap. The user locking the phone is what
+        fixes it, and the app reconnects by itself, so the next
+        session.require finds it live."""
+        try:
+            return self._wait_connected_events(timeout)
+        except _ObserverUnavailable:
+            return self._wait_connected_polling(timeout)
+
+    def _wait_connected_events(self, timeout):
+        """Event-driven wait. One evaluation on entry, then again on every
+        accessibility notification. If a notification is missed, the same
+        check runs about once a second so the attempt cannot stall."""
+        start = _now()
+        streak = 0
+        state = "blocked"
+        decided = None
+        last_event = start
+
+        def evaluate():
+            nonlocal streak, state, decided
+            state = self._session_state()
+            decided, streak = self._connection_choice(
+                state, streak, _now() - start)
+
+        def on_notify():
+            nonlocal last_event
+            last_event = _now()
+            evaluate()
+            if decided is not None:
+                _stop_run_loop()
+
+        watch = _ax_watch_open(self.mirror, on_notify)
+        try:
+            evaluate()
+            if decided is not None:
+                return decided
+            while _now() - start < timeout:
+                remaining = timeout - (_now() - start)
+                before = _now()
+                _run_loop_slice(min(_EVENT_SLICE, remaining))
+                if decided is not None:
+                    return decided
+                # A hang, or a notification the observer did not deliver.
+                if _now() - last_event >= _EVENT_QUIET:
+                    evaluate()
+                    last_event = _now()
+                    if decided is not None:
+                        return decided
+                if _now() <= before:
+                    _sleep(min(_EVENT_SLICE, timeout - (_now() - start)))
+            return "blocked" if state == "ready" and streak < 3 else state
+        finally:
+            watch.close()
+
+    def _wait_connected_polling(self, timeout):
+        """The pre-observer wait, used when AXObserver cannot be installed.
+
+        Same decisions as the event wait, including treating a "Connecting
+        to" screen with no buttons as still in progress."""
         start = _now()
         _sleep(1.0)
         streak = 0
         state = self._session_state()
         while _now() - start < timeout:
-            streak = streak + 1 if state == "ready" else 0
-            if streak >= 3:
-                return "ready"
-            if state == "blocked" and _now() - start > _ATTEMPT_SETTLE:
-                titles = {t.lower() for t, _ in self.mirror.window_ax_buttons()}
-                if not titles & set(_NOT_CONNECT_BUTTONS):
-                    break
+            decided, streak = self._connection_choice(
+                state, streak, _now() - start)
+            if decided is not None:
+                return decided
             _sleep(0.5)
             state = self._session_state()
         return "blocked" if state == "ready" and streak < 3 else state
+
+    def _connection_choice(self, state, streak, elapsed):
+        """('ready' | 'blocked' | None, streak) for one look at the window.
+
+        None means the attempt is still in progress. 'ready' only after the
+        live stream has held for three looks. 'blocked' is a finished
+        interstitial once the Connecting screen has had time to appear."""
+        streak = streak + 1 if state == "ready" else 0
+        if streak >= 3:
+            return "ready", streak
+        if (state == "blocked" and elapsed > _ATTEMPT_SETTLE
+                and not self._still_connecting()):
+            return "blocked", streak
+        return None, streak
+
+    def _still_connecting(self):
+        """The Connecting screen, including one that has no buttons.
+
+        The words are the signal. A Background button is the other form of
+        the same screen; either one means the press has not finished."""
+        content = self.mirror.window_ax_content()
+        text = " ".join(t for _role, t in content if t).lower()
+        if "connecting to" in text:
+            return True
+        return any(t.lower() == "background"
+                   for t, _el in self.mirror.window_ax_buttons())
 
     def _session_refocus(self):
         self.mirror.activate()
@@ -295,8 +383,189 @@ _NOT_CONNECT_BUTTONS = ("background", "cancel", "quit", "unlock", "ok",
                         "done", "settings")
 _LAUNCH_WAIT = 12.0     # app launch to phone window
 _WINDOW_WAIT = 6.0      # app running, window still coming up
-_CONNECT_WAIT = 12.0    # press to live stream, the cap; a failure shows in ~3s
+_CONNECT_WAIT = 12.0    # press to live stream, the cap; a hang emits no events
 _ATTEMPT_SETTLE = 2.5   # a press has drawn Connecting and then its outcome by now
+_EVENT_SLICE = 0.2      # how long one CFRunLoopRunInMode turn waits
+_EVENT_QUIET = 1.0      # re-check when no notification arrives for this long
+
+# Posted on the app element and the phone window. A Connecting screen that
+# never exposes a button still changes one of these as its label appears and
+# as the live stream replaces it.
+_AX_NOTIFICATIONS = (
+    "kAXValueChangedNotification",
+    "kAXTitleChangedNotification",
+    "kAXUIElementDestroyedNotification",
+    "kAXCreatedNotification",
+    "kAXWindowCreatedNotification",
+    "kAXLayoutChangedNotification",
+    "kAXFocusedUIElementChangedNotification",
+)
+_AX_NOTIFICATION_NAMES = (
+    "AXValueChanged",
+    "AXTitleChanged",
+    "AXUIElementDestroyed",
+    "AXCreated",
+    "AXWindowCreated",
+    "AXLayoutChanged",
+    "AXFocusedUIElementChanged",
+)
+
+
+class _ObserverUnavailable(Exception):
+    """AXObserver could not be installed. The polling wait is the fallback."""
+
+
+class _AxWatch:
+    """An observer and the run-loop source it was scheduled on.
+
+    close() removes both. It is safe to call twice, and a failure while
+    removing one does not skip the other."""
+
+    def __init__(self, remove_note, remove_source, notes, callback):
+        self._remove_note = remove_note
+        self._remove_source = remove_source
+        self._notes = list(notes)
+        self._callback = callback          # the observer holds this too
+        self.closed = False
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self._remove_source()
+        except Exception:
+            pass
+        for el, name in self._notes:
+            try:
+                self._remove_note(el, name)
+            except Exception:
+                pass
+
+
+def _ax_watch_open(mirror, on_notify):
+    """Observe iPhone Mirroring and call `on_notify` for each notification.
+
+    `on_notify` takes no arguments. The caller runs the observer's run-loop
+    source in short slices via `_run_loop_slice` and must `close()` the
+    returned watch.
+
+    Raises _ObserverUnavailable, without probing the app, when this transport
+    has no `ax_observer_target`. A test double therefore falls straight
+    through to polling and does not consume a scripted frame.
+    """
+    target = getattr(mirror, "ax_observer_target", None)
+    if target is None:
+        raise _ObserverUnavailable(
+            "this transport has no accessibility observer")
+    try:
+        opened = target()
+    except Exception as exc:
+        raise _ObserverUnavailable(
+            "could not read the mirroring app for an observer") from exc
+    if not opened or len(opened) != 2:
+        raise _ObserverUnavailable("the mirroring app is not observable")
+    pid, elements = opened
+    elements = [el for el in (elements or []) if el is not None]
+    if pid is None or not elements:
+        raise _ObserverUnavailable("the mirroring app is not observable")
+
+    try:
+        import ApplicationServices as ax
+        import CoreFoundation as cf
+    except Exception as exc:
+        raise _ObserverUnavailable(
+            "accessibility observer support is unavailable") from exc
+
+    holder = {"fn": on_notify}
+
+    def callback(observer, element, notification, refcon):
+        # One bad notification must not kill the run loop. The caller's
+        # quiet re-check evaluates again outside the callback.
+        try:
+            holder["fn"]()
+        except Exception:
+            pass
+
+    try:
+        try:
+            created = ax.AXObserverCreate(int(pid), callback, None)
+        except TypeError:
+            created = ax.AXObserverCreate(int(pid), callback)
+    except Exception as exc:
+        raise _ObserverUnavailable("AXObserverCreate failed") from exc
+    if isinstance(created, tuple):
+        err = created[0]
+        observer = created[1] if len(created) > 1 else None
+    else:
+        err, observer = 0, created
+    if err or observer is None:
+        raise _ObserverUnavailable("AXObserverCreate failed")
+
+    try:
+        source = ax.AXObserverGetRunLoopSource(observer)
+    except Exception as exc:
+        raise _ObserverUnavailable(
+            "the observer has no run-loop source") from exc
+    if source is None:
+        raise _ObserverUnavailable("the observer has no run-loop source")
+    try:
+        loop = cf.CFRunLoopGetCurrent()
+        mode = cf.kCFRunLoopDefaultMode
+        cf.CFRunLoopAddSource(loop, source, mode)
+    except Exception as exc:
+        raise _ObserverUnavailable(
+            "could not schedule the observer") from exc
+
+    names = [getattr(ax, const, None) or fallback
+             for const, fallback in zip(_AX_NOTIFICATIONS,
+                                        _AX_NOTIFICATION_NAMES)]
+    added = []
+
+    def remove_source():
+        cf.CFRunLoopRemoveSource(loop, source, mode)
+
+    try:
+        for el in elements:
+            for name in names:
+                try:
+                    note_err = ax.AXObserverAddNotification(
+                        observer, el, name, None)
+                except Exception:
+                    continue
+                if not note_err:
+                    added.append((el, name))
+        if not added:
+            raise _ObserverUnavailable(
+                "no accessibility notifications were registered")
+    except _ObserverUnavailable:
+        try:
+            remove_source()
+        except Exception:
+            pass
+        raise
+
+    def remove_note(el, name):
+        ax.AXObserverRemoveNotification(observer, el, name)
+
+    return _AxWatch(remove_note, remove_source, added, callback)
+
+
+def _run_loop_slice(seconds):
+    """Run the current thread's run loop long enough for one burst of
+    accessibility notifications. returnAfterSourceHandled is false so a
+    single event does not end the slice early; the callback stops the loop
+    itself once the attempt is decided."""
+    import CoreFoundation as cf
+    cf.CFRunLoopRunInMode(cf.kCFRunLoopDefaultMode, float(seconds), False)
+
+
+def _stop_run_loop():
+    try:
+        import CoreFoundation as cf
+        cf.CFRunLoopStop(cf.CFRunLoopGetCurrent())
+    except Exception:
+        pass
 
 
 def _now():

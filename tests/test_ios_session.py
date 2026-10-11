@@ -13,8 +13,27 @@ sys.path.insert(0, str(SRC))
 
 try:
     from phone_harness import ios
-except ImportError:                      # no pyobjc: nothing to test here
-    ios = None
+except ImportError:                      # no pyobjc: stub the frameworks so the
+    ios = None                           # session machine can still be tested
+
+if ios is None:
+    import types
+
+    class _LazyModule(types.ModuleType):
+        def __getattr__(self, name):
+            if name.startswith("__"):
+                raise AttributeError(name)
+            obj = type(name, (), {})
+            setattr(self, name, obj)
+            return obj
+
+    for _name in ("Quartz", "Vision", "Foundation", "AppKit",
+                  "ApplicationServices", "objc", "CoreFoundation"):
+        sys.modules.setdefault(_name, _LazyModule(_name))
+    try:
+        from phone_harness import ios
+    except ImportError:
+        ios = None
 
 WIN = {"x": 0, "y": 0, "w": 400, "h": 800, "id": 1}
 CONNECT = [("AXImage", "iPhoneOff"), ("AXStaticText", "Timed Out"),
@@ -26,6 +45,11 @@ IN_USE = [("AXStaticText", "iPhone in Use"),
           ("AXButton", "Try Again")]
 CONNECTING = [("AXStaticText", "Connecting to"),
               ("AXStaticText", "iPhone 17 Pro Max"), ("AXButton", "Background")]
+# The Connecting screen from a live attempt: the words, and no button at all.
+# Treating "no Background button" as a finished failure gave up while this
+# was still on screen.
+CONNECTING_PLAIN = [("AXStaticText", "Connecting to"),
+                    ("AXStaticText", "iPhone 17 Pro Max")]
 IN_USE_RETRYING = [("AXStaticText", "iPhone in Use"),
                    ("AXStaticText", "Lock your iPhone to connect.")]
 LOGIN = [("AXStaticText", "Enter the Mac login password"),
@@ -102,6 +126,7 @@ class FakeVision:
 class SessionRequire(unittest.TestCase):
     def setUp(self):
         self._sleep, self._now, self._vision = ios._sleep, ios._now, ios._vision
+        self._open, self._slice = ios._ax_watch_open, ios._run_loop_slice
         self.clock = [0.0]
         ios._sleep = lambda s: self.clock.__setitem__(0, self.clock[0] + s)
         ios._now = lambda: self.clock[0]
@@ -109,6 +134,34 @@ class SessionRequire(unittest.TestCase):
 
     def tearDown(self):
         ios._sleep, ios._now, ios._vision = self._sleep, self._now, self._vision
+        ios._ax_watch_open, ios._run_loop_slice = self._open, self._slice
+
+    def watch_events(self, notify):
+        """A fake observer. Each run-loop slice advances the fake clock and,
+        when `notify` is true, delivers one accessibility notification."""
+        holder = {}
+
+        class Watch:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        def opener(mirror, on_notify):
+            watch = Watch()
+            holder["watch"] = watch
+            holder["on_notify"] = on_notify
+            return watch
+
+        def slice(seconds):
+            self.clock[0] += seconds
+            if notify:
+                holder["on_notify"]()
+
+        ios._ax_watch_open = opener
+        ios._run_loop_slice = slice
+        return holder
 
     def phone(self, *frames):
         p = ios.IPhone.__new__(ios.IPhone)
@@ -190,6 +243,42 @@ class SessionRequire(unittest.TestCase):
             p._session_require()
         self.assertEqual(p.mirror.launched, 1)
         self.assertIn("no phone window", str(cm.exception))
+
+    def test_connecting_without_a_button_keeps_waiting_then_connects(self):
+        # No notifications arrive. The once-a-second re-check must still see
+        # "Connecting to" (there is no Background button) and wait it out.
+        holder = self.watch_events(notify=False)
+        p = self.phone(CONNECT, CONNECT, *([CONNECTING_PLAIN] * 6), LIVE)
+        self.assertEqual(p._session_require(), WIN)
+        self.assertEqual(p.mirror.pressed, ["Connect"])
+        self.assertGreater(self.clock[0], ios._ATTEMPT_SETTLE)
+        self.assertLess(self.clock[0], ios._CONNECT_WAIT)
+        self.assertTrue(holder["watch"].closed)
+
+    def test_iphone_in_use_fails_fast_on_an_accessibility_event(self):
+        holder = self.watch_events(notify=True)
+        p = self.phone(CONNECT, CONNECT, CONNECTING_PLAIN, IN_USE)
+        with self.assertRaises(RuntimeError) as cm:
+            p._session_require()
+        self.assertIn("iPhone in Use", str(cm.exception))
+        self.assertIn("pressed Connect", str(cm.exception))
+        self.assertLess(self.clock[0], 5.0, "gave up within a few seconds")
+        self.assertGreater(self.clock[0], ios._ATTEMPT_SETTLE)
+        self.assertTrue(holder["watch"].closed)
+        self.assertEqual(p.mirror.pressed, ["Connect"])
+
+    def test_observer_setup_failure_falls_back_and_waits_out_connecting(self):
+        # Observer setup fails closed. Polling then treats the button-less
+        # Connecting screen as still in progress and waits for the stream.
+        def boom(mirror, on_notify):
+            raise ios._ObserverUnavailable("AXObserverCreate failed")
+
+        ios._ax_watch_open = boom
+        p = self.phone(CONNECT, CONNECT, *([CONNECTING_PLAIN] * 5), LIVE)
+        self.assertEqual(p._session_require(), WIN)
+        self.assertEqual(p.mirror.pressed, ["Connect"])
+        self.assertGreater(self.clock[0], ios._ATTEMPT_SETTLE)
+        self.assertLess(self.clock[0], ios._CONNECT_WAIT)
 
 
 if __name__ == "__main__":

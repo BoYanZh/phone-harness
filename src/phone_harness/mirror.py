@@ -359,6 +359,29 @@ def is_frontmost():
     return bool(win) and win.get("kCGWindowOwnerPID") == app.processIdentifier()
 
 
+def ax_observer_target():
+    """(pid, [app element, window element]) for an accessibility observer.
+
+    The window element is included when it can be matched. Notifications on
+    the app catch a window being created; notifications on the window catch
+    the Connecting label appearing and the live stream replacing it. Raises
+    when the app is not running so the caller can fall back to polling.
+    """
+    app = running_app()
+    if app is None:
+        raise RuntimeError(f"{APP_NAME} isn't running")
+    pid = app.processIdentifier()
+    app_el = _AS.AXUIElementCreateApplication(pid)
+    if app_el is None:
+        raise RuntimeError(f"{APP_NAME} has no accessibility element")
+    elements = [app_el]
+    win = find_window(on_screen=False)
+    window_el = _ax_window_element(app, win) if win else None
+    if window_el is not None:
+        elements.append(window_el)
+    return pid, elements
+
+
 def _ax_window_element(app, win):
     """The AXUIElement for `win`, matched by geometry against the app's
     AXWindows the way window_ax_content() does, or None.

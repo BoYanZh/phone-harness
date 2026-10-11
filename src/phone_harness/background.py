@@ -89,6 +89,7 @@ running_app = mirror.running_app
 window_ax_content = mirror.window_ax_content
 window_ax_buttons = mirror.window_ax_buttons
 press_window_button = mirror.press_window_button
+ax_observer_target = mirror.ax_observer_target
 launch = mirror.launch
 focus_probe = mirror.focus_probe
 interruption = mirror.interruption
