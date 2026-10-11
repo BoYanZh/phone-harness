@@ -148,6 +148,14 @@ def connect(platform=None, **kw):
                 return Remote(rented["link"]["url"], rented["link"]["token"])
             if rented:
                 platform = "android"
+            else:
+                # The agent was driving a cloud phone and it ended. Falling
+                # through would run the next script on whatever phone is on
+                # this desk. Say so, and name the command that starts the
+                # same catalog phone again. This does not rent one itself.
+                lost = cloud.lost()
+                if lost:
+                    raise cloud.CloudPhoneError(cloud.ended_message(lost))
     platform = platform.lower()
     if platform in ("ios", "iphone", "ipad"):
         if sys.platform != "darwin":

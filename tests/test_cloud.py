@@ -572,6 +572,114 @@ class CloudCli(unittest.TestCase):
         self.assertIn("live.example", r.stdout)
         self.assertNotEqual(r.stdout.strip(), "None", r.stderr)
 
+    def _expire_attached(self):
+        path = Path(self.home.name) / "state" / "cloud.json"
+        state = json.loads(path.read_text())
+        sid = state["session"]["sid"]
+        when = time.time() - 30
+        state["session"]["expires_at"] = when
+        for rec in (state.get("sessions") or {}).values():
+            if isinstance(rec, dict) and rec.get("sid") == sid:
+                rec["expires_at"] = when
+        path.write_text(json.dumps(state))
+        return sid
+
+    def _connect_script(self, also_attached=False):
+        lines = ["from phone_harness import cloud, transport"]
+        if also_attached:
+            lines += ["try:",
+                      "    print('ATTACHED', cloud.attached())",
+                      "except RuntimeError as e:",
+                      "    print('REFUSED', e)"]
+        lines += ["try:",
+                  "    transport.connect()",
+                  "    print('RAN')",
+                  "except RuntimeError as e:",
+                  "    print('CONNECT', e)"]
+        return "\n".join(lines) + "\n"
+
+    def test_no_cloud_state_file_still_means_no_cloud_phone(self):
+        r = subprocess.run([sys.executable, "-c",
+                            "from phone_harness import cloud\n"
+                            "print('ATTACHED', cloud.attached())\n"
+                            "print('LOST', cloud.lost())\n"],
+                           capture_output=True, text=True, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("ATTACHED None", r.stdout)
+        self.assertIn("LOST None", r.stdout)
+
+    def test_an_unreadable_cloud_state_file_does_not_fall_back(self):
+        state = Path(self.home.name) / "state"
+        state.mkdir(parents=True)
+        (state / "cloud.json").write_text("{not json")
+        r = subprocess.run([sys.executable, "-c", self._connect_script(also_attached=True)],
+                           capture_output=True, text=True, env=self.env)
+        self.assertIn("REFUSED", r.stdout, r.stderr)
+        self.assertIn("unreadable", r.stdout)
+        self.assertIn("CONNECT", r.stdout)
+        self.assertNotIn("RAN", r.stdout)
+        self.assertNotIn("expired", r.stdout)
+
+    def test_an_expired_session_pin_does_not_fall_back_to_a_local_phone(self):
+        self.login()
+        started = self.run_cli("cloud", "start", "Saved phone", "--no-watch")
+        self.assertEqual(started.returncode, 0, started.stderr)
+        sid = self._expire_attached()
+        r = subprocess.run([sys.executable, "-c", self._connect_script(also_attached=True)],
+                           capture_output=True, text=True,
+                           env={**self.env, "PHONE_HARNESS_SESSION": sid})
+        self.assertIn("REFUSED", r.stdout, r.stderr)
+        self.assertIn(f"session {sid} expired", r.stdout)
+        self.assertIn('cloud start "Saved phone"', r.stdout)
+        self.assertIn("--for", r.stdout)
+        self.assertIn("<longer>", r.stdout)
+        self.assertNotIn("RAN", r.stdout)
+        self.assertNotIn("unreachable", r.stdout)
+
+    def test_an_expired_attached_session_does_not_fall_back(self):
+        self.login()
+        started = self.run_cli("cloud", "start", "Saved phone", "--no-watch")
+        self.assertEqual(started.returncode, 0, started.stderr)
+        sid = self._expire_attached()
+        r = subprocess.run([sys.executable, "-c", self._connect_script(also_attached=True)],
+                           capture_output=True, text=True, env=self.env)
+        self.assertIn("ATTACHED None", r.stdout, r.stderr)
+        self.assertIn("CONNECT", r.stdout)
+        self.assertIn(f"session {sid} expired", r.stdout)
+        self.assertIn('cloud start "Saved phone"', r.stdout)
+        self.assertIn("--for", r.stdout)
+        self.assertNotIn("RAN", r.stdout)
+
+    def test_a_session_that_dies_does_not_fall_back_to_a_local_phone(self):
+        self.login()
+        started = self.run_cli("cloud", "start", "Saved phone", "--no-watch")
+        self.assertEqual(started.returncode, 0, started.stderr)
+        FakeCloud.sessions.clear()
+        status = self.run_cli("cloud")
+        self.assertIn("unreachable", status.stdout, status.stderr)
+        self.assertIn("failed", status.stdout)
+        self.assertIn('cloud start "Saved phone"', status.stdout)
+        self.assertIn("--for", status.stdout)
+        self.assertNotIn("expired", status.stdout)
+        r = subprocess.run([sys.executable, "-c", self._connect_script()],
+                           capture_output=True, text=True, env=self.env)
+        self.assertIn("CONNECT", r.stdout, r.stderr)
+        self.assertIn("unreachable", r.stdout)
+        self.assertIn("failed", r.stdout)
+        self.assertIn('cloud start "Saved phone"', r.stdout)
+        self.assertNotIn("RAN", r.stdout)
+        self.assertNotIn("expired", r.stdout)
+        still = subprocess.run(
+            [sys.executable, "-c", "from phone_harness import cloud; print(cloud.lost() is not None)"],
+            capture_output=True, text=True, env={**self.env, "PHONE_HARNESS_PLATFORM": "android"})
+        self.assertEqual(still.stdout.strip(), "True", still.stderr)
+        stopped = self.run_cli("cloud", "stop", "--all")
+        self.assertEqual(stopped.returncode, 0, stopped.stderr)
+        cleared = subprocess.run(
+            [sys.executable, "-c", "from phone_harness import cloud; print(cloud.lost())"],
+            capture_output=True, text=True, env=self.env)
+        self.assertEqual(cleared.stdout.strip(), "None", cleared.stderr)
+
     def test_start_waits_out_a_phone_that_is_still_closing(self):
         self.login()
         FakeCloud.sessions["old001"] = {"id": "old001", "state": "closing", "profile": "prof-1",
@@ -908,6 +1016,21 @@ class CloudCli(unittest.TestCase):
         self.assertEqual(
             _plain_error("RuntimeError: RuntimeError: no installed app matches 'Notes'", RuntimeError),
             "no installed app matches 'Notes'")
+        self.assertEqual(
+            _plain_error("CloudPhoneError: session s expired", RuntimeError),
+            "session s expired")
+        self.assertEqual(
+            _plain_error("RuntimeError: CloudPhoneError: session s expired", RuntimeError),
+            "session s expired")
+        self.assertEqual(
+            _plain_error(
+                "phone_harness.cloud.CloudPhoneError: RuntimeError: session s expired",
+                RuntimeError),
+            "session s expired")
+        from phone_harness.cloud import CloudPhoneError
+        self.assertEqual(
+            _plain_error("CloudPhoneError: RuntimeError: session s expired", CloudPhoneError),
+            "session s expired")
         control = ThreadingHTTPServer(("127.0.0.1", 0), FakeControl)
         threading.Thread(target=control.serve_forever, daemon=True).start()
         self.addCleanup(control.server_close)
@@ -927,6 +1050,16 @@ class CloudCli(unittest.TestCase):
         last = [line for line in r.stderr.splitlines() if line.strip()][-1]
         self.assertEqual(last, "RuntimeError: no installed app matches 'Notes'")
         self.assertNotIn("RuntimeError: RuntimeError:", r.stderr)
+        FakeControl.launch_error = {
+            "error": "phone_harness.cloud.CloudPhoneError: session dead1 expired"}
+        again = self.run_cli(stdin=script)
+        self.assertNotEqual(again.returncode, 0)
+        cloud_last = [line for line in again.stderr.splitlines() if line.strip()][-1]
+        self.assertEqual(
+            cloud_last, "phone_harness.cloud.CloudPhoneError: session dead1 expired")
+        self.assertNotIn("RuntimeError: phone_harness.cloud.CloudPhoneError:", again.stderr)
+        self.assertNotIn("CloudPhoneError: phone_harness.cloud.CloudPhoneError:", again.stderr)
+        self.assertNotIn("CloudPhoneError: RuntimeError:", again.stderr)
 
     def test_a_session_pin_targets_one_phone_for_commands_and_helpers(self):
         self.login()

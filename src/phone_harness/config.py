@@ -25,9 +25,13 @@ One rule for every setting: explicit argument, else environment variable,
 else config file, else built-in default. A `.env` file at the repo root or
 in the agent workspace is read once at import and fills in environment
 variables that are not already set (the same as browser-harness): a place
-for per-machine overrides such as PHONE_HARNESS_CLOUD_API, never committed. `get("android.poke_every")` looks
-at PHONE_HARNESS_ANDROID_POKE_EVERY, then config.json, then DEFAULTS. Env
-vars are per-call overrides; nothing requires them.
+for per-machine overrides such as PHONE_HARNESS_CLOUD_API, never committed.
+Resolving that workspace creates it from the packaged defaults when the
+directory does not exist; an existing directory is not modified. An
+install keeps it under the home directory, not the install prefix.
+`get("android.poke_every")` looks at PHONE_HARNESS_ANDROID_POKE_EVERY, then
+config.json, then DEFAULTS. Env vars are per-call overrides; nothing
+requires them.
 
 Files are versioned, read forgivingly (a corrupt file is a warning and
 defaults, never a crash) and written atomically. Unknown keys survive a
@@ -47,8 +51,12 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 def _load_env_files():
     """KEY=value lines from <repo>/.env and <agent-workspace>/.env into the
     environment, without overriding what is already set. No dependency; a
-    `#` line is a comment, quotes around a value are stripped."""
-    workspace = Path(os.environ.get("PH_AGENT_WORKSPACE", _REPO_ROOT / "agent-workspace"))
+    `#` line is a comment, quotes around a value are stripped.
+
+    The workspace path is the same one the helpers use, so a missing
+    directory is seeded before its `.env` is read."""
+    from .workspace import agent_workspace
+    workspace = agent_workspace()
     for path in (_REPO_ROOT / ".env", workspace / ".env"):
         try:
             text = path.read_text(encoding="utf-8-sig")

@@ -23,14 +23,66 @@ TMP = Path(tempfile.gettempdir()) / "phone-harness"
 USER_AGENT = "phone-harness-cli"
 
 
+def _cloud_phone_error():
+    from .cloud import CloudPhoneError
+    return CloudPhoneError
+
+
+def _runtime_prefixes():
+    """Type prefixes a host may put on a RuntimeError-family message.
+
+    CloudPhoneError is a RuntimeError. The traceback printer qualifies it
+    (`phone_harness.cloud.CloudPhoneError:`), and a host may also send the
+    bare class name or `RuntimeError:`.
+    """
+    cloud = _cloud_phone_error()
+    qualified = f"{cloud.__module__}.{cloud.__qualname__}: "
+    return (qualified, "CloudPhoneError: ", "RuntimeError: ")
+
+
 def _plain_error(message, exc_type):
-    """Drop a leading `TypeName:` that repeats the exception about to be raised."""
+    """Drop a leading `TypeName:` that repeats the exception about to be raised.
+
+    Raising RuntimeError while a CloudPhoneError prefix is still on the text
+    (or the reverse) prints both types.
+    """
     if not isinstance(message, str):
         message = str(message)
-    prefix = exc_type.__name__ + ": "
-    while message.startswith(prefix):
-        message = message[len(prefix):]
+    prefixes = [exc_type.__name__ + ": "]
+    if exc_type.__name__ in ("RuntimeError", "CloudPhoneError"):
+        for prefix in _runtime_prefixes():
+            if prefix not in prefixes:
+                prefixes.append(prefix)
+    while True:
+        for prefix in prefixes:
+            if message.startswith(prefix):
+                message = message[len(prefix):]
+                break
+        else:
+            break
     return message or exc_type.__name__
+
+
+def _host_error(message):
+    """The exception the host named. A CloudPhoneError stays a CloudPhoneError."""
+    text = message if isinstance(message, str) else str(message)
+    cloud = _cloud_phone_error()
+    qualified = f"{cloud.__module__}.{cloud.__qualname__}: "
+    named = RuntimeError
+    while True:
+        if text.startswith(qualified):
+            named = cloud
+            text = text[len(qualified):]
+            continue
+        if text.startswith("CloudPhoneError: "):
+            named = cloud
+            text = text[len("CloudPhoneError: "):]
+            continue
+        if text.startswith("RuntimeError: "):
+            text = text[len("RuntimeError: "):]
+            continue
+        break
+    return named(_plain_error(message, named))
 
 
 class Remote(Backend):
@@ -65,9 +117,11 @@ class Remote(Backend):
                 raise RuntimeError("the cloud phone session is gone or its grant expired; "
                                    "`phone-harness cloud` shows whether it is still running") from None
             # The host's `error` already includes its exception type
-            # ("RuntimeError: no installed app matches 'Notes'"). Raising
-            # RuntimeError(message) would print that type twice.
-            raise RuntimeError(_plain_error(message, RuntimeError)) from None
+            # ("RuntimeError: no installed app matches 'Notes'", or
+            # "CloudPhoneError: session … expired"). Raising that string
+            # as-is would print the type twice. A CloudPhoneError stays one,
+            # so a dead cloud phone is not reported as a plain RuntimeError.
+            raise _host_error(message) from None
         except urllib.error.URLError as e:
             raise RuntimeError(f"could not reach the cloud phone: {e.reason}") from None
 
