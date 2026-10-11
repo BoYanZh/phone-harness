@@ -985,6 +985,59 @@ class CloudCli(unittest.TestCase):
         self.assertIn("Saved phone", next(line for line in text.splitlines() if "liveand" in line))
         self.assertIn("Temporary", next(line for line in text.splitlines() if "livetemp" in line))
 
+    def test_ls_inlines_a_running_iphone_that_does_not_echo_its_id(self):
+        """Live shape: the session's `device` is the word iPhone, not the catalog id.
+
+        GET /me `available` marks that phone `state: running`. GET /sessions
+        does not return `device_id`. One running ios device and one ios
+        session with no id share the catalog row.
+        """
+        self.login()
+        FakeCloud.available = [
+            {"platform": "ios", "kind": "device", "id": "iph-e2eeaed7e6",
+             "label": "iPhone", "state": "running"},
+            {"platform": "android", "kind": "emulator", "id": "prof-1",
+             "label": "Saved phone", "state": "stored"},
+            {"platform": "android", "kind": "emulator", "temporary": True,
+             "label": "Temporary phone"},
+        ]
+        soon = time.time() + 117
+        FakeCloud.sessions["74f35c02595f"] = {
+            "id": "74f35c02595f", "state": "ready", "platform": "ios", "kind": "device",
+            "device": "iPhone", "phone": None, "profile": None, "billing_mode": "disabled",
+            "expires_at": soon,
+            "control": {"url": "http://127.0.0.1:1", "token": "ct_1"}}
+        raw = self.run_cli("cloud", "ls", "--json")
+        self.assertEqual(raw.returncode, 0, raw.stderr)
+        rows = json.loads(raw.stdout)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(rows[0]["id"], "iph-e2eeaed7e6")
+        self.assertEqual(rows[0]["state"], "running")
+        self.assertEqual(rows[0]["session"]["id"], "74f35c02595f")
+        self.assertFalse(rows[0].get("unmatched"))
+        text = self.run_cli("cloud", "ls").stdout
+        self.assertEqual(text.count("74f35c02595f"), 1, text)
+        self.assertEqual(sum(1 for line in text.splitlines() if "iPhone" in line), 1, text)
+
+    def test_ls_does_not_guess_when_two_iphones_are_running(self):
+        self.login()
+        FakeCloud.available = [
+            {"platform": "ios", "kind": "device", "id": "iph-a", "label": "iPhone",
+             "state": "running"},
+            {"platform": "ios", "kind": "device", "id": "iph-b", "label": "Other",
+             "state": "running"},
+        ]
+        FakeCloud.sessions["solo"] = {
+            "id": "solo", "state": "ready", "platform": "ios", "kind": "device",
+            "device": "iPhone", "phone": None, "profile": None,
+            "expires_at": time.time() + 600,
+            "control": {"url": "http://127.0.0.1:1", "token": "ct_1"}}
+        rows = json.loads(self.run_cli("cloud", "ls", "--json").stdout)
+        self.assertIsNone(rows[0]["session"])
+        self.assertIsNone(rows[1]["session"])
+        self.assertEqual(rows[2]["session"]["id"], "solo")
+        self.assertTrue(rows[2]["unmatched"])
+
     def test_start_does_not_repeat_an_iphone_label(self):
         self.login()
         FakeCloud.available = [

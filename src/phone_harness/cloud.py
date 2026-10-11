@@ -1343,7 +1343,9 @@ def _session_on_entry(entry, session):
 
     Match by device_id or profile_id (a catalog row keeps that id on `id`,
     `device_id`, or `profile_id`). A temporary row, which names neither, is
-    the session that also names neither. Anything else is not this row."""
+    the session that also names neither. Anything else is not this row.
+    An iPhone session does not carry the catalog id: `device` is the display
+    word "iPhone". That case is decided in `_inline_running`."""
     devices, profiles = _session_ids(session)
     entry_ids = _id_set(entry, ("id", "device_id", "profile_id"))
     if (devices | profiles) & entry_ids:
@@ -1354,6 +1356,43 @@ def _session_on_entry(entry, session):
         platform = entry.get("platform")
         return not platform or session.get("platform") in (None, platform)
     return False
+
+
+def _inline_running(entries, rows, sessions, used, blob, mine):
+    """Put an id-less live session on the one catalog phone it can be.
+
+    A cloud iPhone's session (`GET /sessions`) has `platform`, `kind`, and
+    `device` set to the display word "iPhone". It does not echo `device_id`.
+    The catalog entry (`GET /me` → `available`) sets `state` to `running`
+    while a session holds that phone. When exactly one entry of that
+    platform and kind is `running`, and exactly one still-unmatched session
+    of that platform names no device or profile id, the session is that row.
+    """
+    for entry, row in zip(entries, rows):
+        if row.get("session") or entry.get("state") != "running":
+            continue
+        platform, kind = entry.get("platform"), entry.get("kind")
+        if not platform or not kind:
+            continue
+        running = [e for e in entries
+                   if e.get("platform") == platform and e.get("kind") == kind
+                   and e.get("state") == "running"]
+        if len(running) != 1:
+            continue
+        candidates = []
+        for session in sessions:
+            if session.get("id") in used or session.get("platform") != platform:
+                continue
+            devices, profiles = _session_ids(session)
+            if devices or profiles:
+                continue
+            candidates.append(session)
+        if len(candidates) != 1:
+            continue
+        match = candidates[0]
+        used.add(match["id"])
+        row["session"] = blob(match)
+        row["targeted"] = match.get("id") == mine
 
 
 def _ls_rows(me, sessions):
@@ -1386,6 +1425,7 @@ def _ls_rows(me, sessions):
             "session": session_blob(match) if match else None,
             "targeted": bool(match and match.get("id") == mine),
         })
+    _inline_running(catalog, rows, sessions, used, session_blob, mine)
     for s in sessions:
         if s.get("id") in used:
             continue

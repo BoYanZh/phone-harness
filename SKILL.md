@@ -131,8 +131,12 @@ phone. The service keeps no default phone; a preference is the chooser's. A **se
 `cloud ls` prints one row per catalog phone and writes any live session on
 that row (`*` is the session this process targets). A session lines up with
 the row that has the same device_id or profile_id; a session with neither
-lines up with the temporary row. A running session that matches no row is
-still listed on its own.
+lines up with the temporary row. A cloud iPhone session does not echo that
+id: its `device` is the word "iPhone", and the catalog row's `state` is
+`running` while a session holds it. When exactly one row of that platform
+and kind is `running` and exactly one leftover session of that platform
+names no id, the session is written on that row. A session that still
+matches nothing is listed on its own.
 
 `cloud start` with no name starts this machine's `cloud.phone` setting
 (`config set cloud.phone "Desk phone"`) when one is set; otherwise it sends
