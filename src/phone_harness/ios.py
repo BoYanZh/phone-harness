@@ -57,6 +57,22 @@ class IPhone(Backend):
 
     def __init__(self):
         self.mirror, self.background = _load_transport()
+        self._session_watch = None
+        self._session_watch_off = False
+        self._session_lost = None
+        self._note_seen = False
+
+    def send(self, op, **kw):
+        """Run `op`. Actions and captures check the stream first and again
+        after, and raise if it is no longer live. They do not press Connect:
+        a takeover means the user has the phone."""
+        watch = op in _ACTION_OPS
+        if watch:
+            self._raise_if_not_live()
+        result = super().send(op, **kw)
+        if watch:
+            self._raise_if_not_live()
+        return result
 
     # --- screen ---------------------------------------------------------
 
@@ -65,8 +81,8 @@ class IPhone(Backend):
 
     def _screen_require(self):
         """Bounds for gesture maths. Distinct from session.require, which is
-        the full connected gate — reading the window rect should not put the
-        session through an interstitial check on every swipe."""
+        the full connected gate. The liveness check lives on the action
+        (see send), not on this bounds read."""
         return self.mirror.ensure_window()
 
     def _screen_capture(self, path=None):
@@ -197,6 +213,82 @@ class IPhone(Backend):
                 state = self._wait_connected(_CONNECT_WAIT)
         if state == "ready":
             return self.mirror.find_window()
+        self._raise_not_live(state, pressed)
+
+    def _raise_if_not_live(self):
+        """Raise the session-require error if the stream is no longer live.
+
+        Does not press Connect and does not launch the app. A long-lived
+        accessibility observer is drained with a zero timeout so a window
+        change already queued is applied first; a missed notification still
+        loses to one structural read (no capture, no OCR)."""
+        state = self._live_probe()
+        if state != "ready":
+            self._raise_not_live(state)
+
+    def _live_probe(self):
+        """Current liveness, cheaply.
+
+        Two structural reads bracket each guarded action (before and after).
+        Each read is one ax_session_hint(): the running app, the phone
+        window, and whether that window has any accessibility children. A
+        live stream has none. There is no screen capture and no Vision OCR,
+        which is what a full session.state costs.
+
+        When the observer is up, a zero-timeout run-loop turn delivers a
+        notification that arrived since the last action, and that
+        notification's own read is the answer. The turn does not sleep.
+        Measured here, where there is no accessibility server: the guard
+        around one live action is under 0.01 ms of Python. On a Mac the
+        rest is ax_session_hint, twice per action (before and after): one
+        lookup of the app, its window, and that window's children. A live
+        stream has no children, so the walk stops at the window.
+        """
+        self._arm_session_watch()
+        self._note_seen = False
+        if self._session_watch is not None:
+            _drain_run_loop()
+            if self._note_seen:
+                return self._session_lost
+        return self._structural_state()
+
+    def _arm_session_watch(self):
+        """Install the observer once. A transport with no target (the fakes)
+        fails closed and every later probe uses the structural read."""
+        if not hasattr(self, "_session_watch"):
+            self._session_watch = None
+            self._session_watch_off = False
+            self._session_lost = None
+            self._note_seen = False
+        if self._session_watch is not None or self._session_watch_off:
+            return
+
+        def on_notify():
+            state = self._structural_state()
+            self._session_lost = state
+            self._note_seen = True
+
+        try:
+            self._session_watch = _ax_watch_open(self.mirror, on_notify)
+        except _ObserverUnavailable:
+            self._session_watch = None
+            self._session_watch_off = True
+
+    def _structural_state(self):
+        """ready | blocked | no-window | not-running, without capture or OCR."""
+        hint = getattr(self.mirror, "ax_session_hint", None)
+        if hint is not None:
+            return hint()
+        if self.mirror.running_app() is None:
+            return "not-running"
+        if self.mirror.find_window() is None:
+            return "no-window"
+        if self.mirror.window_ax_content():
+            return "blocked"
+        return "ready"
+
+    def _raise_not_live(self, state, pressed=None):
+        """The error ensure_mirroring raises, without pressing anything."""
         if state == "not-running":
             raise RuntimeError(
                 "iPhone Mirroring would not launch. Please open the iPhone "
@@ -559,6 +651,29 @@ def _ax_watch_open(mirror, on_notify):
         ax.AXObserverRemoveNotification(observer, el, name)
 
     return _AxWatch(remove_note, remove_source, added, callback)
+
+
+# Ops that drive the phone or read its screen. Each one refuses to run
+# against a paused window. session.require is not here: that is the one
+# call allowed to press Connect, and only when the user asks to resume.
+_ACTION_OPS = frozenset({
+    "screen.capture", "screen.text", "screen.text_pixels",
+    "input.tap", "input.press", "input.drag", "input.scroll",
+    "input.keys", "input.text",
+    "nav.home", "nav.recents",
+    "apps.launch",
+})
+
+
+def _drain_run_loop():
+    """Deliver accessibility notifications already queued. Does not wait.
+
+    Timeout 0 and returnAfterSourceHandled true: one ready source runs, and
+    if none is ready this returns immediately. A hang cannot add a sleep to
+    every tap.
+    """
+    import CoreFoundation as cf
+    cf.CFRunLoopRunInMode(cf.kCFRunLoopDefaultMode, 0, True)
 
 
 def _run_loop_slice(seconds):

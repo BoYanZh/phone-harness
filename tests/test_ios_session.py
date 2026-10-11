@@ -27,9 +27,14 @@ if ios is None:
             setattr(self, name, obj)
             return obj
 
+    import importlib.machinery
     for _name in ("Quartz", "Vision", "Foundation", "AppKit",
                   "ApplicationServices", "objc", "CoreFoundation"):
-        sys.modules.setdefault(_name, _LazyModule(_name))
+        if _name in sys.modules:
+            continue
+        _mod = _LazyModule(_name)
+        _mod.__spec__ = importlib.machinery.ModuleSpec(_name, loader=None)
+        sys.modules[_name] = _mod
     try:
         from phone_harness import ios
     except ImportError:
@@ -67,6 +72,7 @@ class FakeMirror:
         self.launched = 0
         self.pressed = []
         self.activated = 0
+        self.actions = []
 
     def _advance(self):
         if len(self.frames) > 1:
@@ -104,7 +110,38 @@ class FakeMirror:
         return self.find_window()
 
     def capture(self, path=None):
+        self.actions.append("capture")
         return "/dev/null", dict(WIN)
+
+    def ax_session_hint(self):
+        """Same one-step advance as running_app(), then the structural state.
+        A live frame is []; anything else with text is an interstitial."""
+        self.running_app()
+        if self.current is None:
+            return "not-running"
+        if self.current == "no-window":
+            return "no-window"
+        if self.current:
+            return "blocked"
+        return "ready"
+
+    def tap(self, x, y):
+        self.actions.append("tap")
+
+    def long_press(self, x, y, duration=0.8):
+        self.actions.append("long_press")
+
+    def drag(self, x1, y1, x2, y2, duration=0.35, steps=14):
+        self.actions.append("drag")
+
+    def scroll_wheel(self, dy, x, y, steps=6, dx=0):
+        self.actions.append("scroll")
+
+    def press(self, combo):
+        self.actions.append("press")
+
+    def type_text(self, text, delay=0.03, keystrokes=False):
+        self.actions.append("type")
 
     def activate(self):
         self.activated += 1
@@ -127,6 +164,7 @@ class SessionRequire(unittest.TestCase):
     def setUp(self):
         self._sleep, self._now, self._vision = ios._sleep, ios._now, ios._vision
         self._open, self._slice = ios._ax_watch_open, ios._run_loop_slice
+        self._drain = ios._drain_run_loop
         self.clock = [0.0]
         ios._sleep = lambda s: self.clock.__setitem__(0, self.clock[0] + s)
         ios._now = lambda: self.clock[0]
@@ -135,6 +173,7 @@ class SessionRequire(unittest.TestCase):
     def tearDown(self):
         ios._sleep, ios._now, ios._vision = self._sleep, self._now, self._vision
         ios._ax_watch_open, ios._run_loop_slice = self._open, self._slice
+        ios._drain_run_loop = self._drain
 
     def watch_events(self, notify):
         """A fake observer. Each run-loop slice advances the fake clock and,
@@ -292,6 +331,82 @@ class SessionRequire(unittest.TestCase):
         self.assertEqual(p.mirror.pressed, ["Connect"])
         self.assertGreater(self.clock[0], ios._ATTEMPT_SETTLE)
         self.assertLess(self.clock[0], ios._CONNECT_WAIT)
+
+    def test_scroll_raises_once_the_window_is_iphone_in_use(self):
+        p = self.phone(IN_USE)
+        with self.assertRaises(RuntimeError) as cm:
+            p.send("input.scroll", x=1, y=1, dy=-10, dx=0)
+        msg = str(cm.exception)
+        self.assertIn("iPhone in Use", msg)
+        self.assertIn("LOCK your iPhone", msg)
+        self.assertIn("passcode", msg)
+        self.assertEqual(p.mirror.pressed, [])
+        self.assertNotIn("scroll", p.mirror.actions)
+
+    def test_a_scroll_that_loses_the_phone_raises_afterwards(self):
+        # Before the gesture the stream is live. The gesture runs. The
+        # window is then "iPhone in Use", so the scroll does not return
+        # success, and Connect is not pressed.
+        p = self.phone(LIVE, LIVE, IN_USE)
+        with self.assertRaises(RuntimeError) as cm:
+            p.send("input.scroll", x=1, y=1, dy=-10, dx=0)
+        self.assertIn("iPhone in Use", str(cm.exception))
+        self.assertEqual(p.mirror.actions, ["scroll"])
+        self.assertEqual(p.mirror.pressed, [])
+
+    def test_live_actions_are_not_interrupted(self):
+        p = self.phone(LIVE)
+        p.send("input.scroll", x=1, y=1, dy=-10, dx=0)
+        p.send("input.tap", x=1, y=2)
+        p.send("input.press", x=1, y=2, duration=0.2)
+        p.send("input.drag", x1=0, y1=0, x2=3, y2=4)
+        p.send("input.keys", combo="return")
+        p.send("input.text", s="hi")
+        p.send("nav.home")
+        p.send("apps.launch", name="Settings")
+        p.send("screen.capture")
+        self.assertEqual(
+            p.mirror.actions,
+            ["scroll", "tap", "long_press", "drag", "press", "type",
+             "press", "press", "type", "press", "capture"])
+        self.assertEqual(p.mirror.pressed, [])
+
+    def test_observer_notification_of_iphone_in_use_raises_before_the_action(self):
+        holder = {}
+
+        class Watch:
+            def close(self):
+                self.closed = True
+
+        def opener(mirror, on_notify):
+            holder["notify"] = on_notify
+            holder["watch"] = Watch()
+            return holder["watch"]
+
+        def drain():
+            if holder.get("fire"):
+                holder["notify"]()
+
+        ios._ax_watch_open = opener
+        ios._drain_run_loop = drain
+        p = self.phone(LIVE)
+        p.send("input.tap", x=1, y=1)
+        p.mirror.frames = [IN_USE]
+        p.mirror.current = IN_USE
+        holder["fire"] = True
+        with self.assertRaises(RuntimeError) as cm:
+            p.send("input.scroll", x=1, y=1, dy=-10, dx=0)
+        self.assertIn("iPhone in Use", str(cm.exception))
+        self.assertIn("LOCK your iPhone", str(cm.exception))
+        self.assertNotIn("scroll", p.mirror.actions)
+        self.assertEqual(p.mirror.pressed, [])
+
+    def test_screenshot_raises_when_the_phone_is_in_use(self):
+        p = self.phone(IN_USE)
+        with self.assertRaises(RuntimeError) as cm:
+            p.send("screen.capture")
+        self.assertIn("iPhone in Use", str(cm.exception))
+        self.assertNotIn("capture", p.mirror.actions)
 
 
 if __name__ == "__main__":

@@ -206,15 +206,36 @@ def launch(timeout=12.0):
     return find_window(on_screen=False)
 
 
-def _window_ax_nodes():
-    """[(role, text, element)] for the native UI inside the phone window.
+def ax_session_hint():
+    """'not-running' | 'no-window' | 'blocked' | 'ready', from accessibility only.
 
-    The shared walk behind window_ax_content() and window_ax_buttons().
+    One pass over the running app, its phone window, and whether that window
+    has any native UI. A live stream has none, so this does not capture the
+    screen and does not run OCR. Callers that need the words still use
+    window_ax_content().
     """
     app = running_app()
     if app is None:
-        return []
+        return "not-running"
     win = find_window(on_screen=False)
+    if win is None:
+        return "no-window"
+    return "blocked" if _window_ax_nodes(app, win) else "ready"
+
+
+def _window_ax_nodes(app=None, win=None):
+    """[(role, text, element)] for the native UI inside the phone window.
+
+    The shared walk behind window_ax_content() and window_ax_buttons().
+    `app` and `win` can be passed in by ax_session_hint() so a liveness
+    check does not look them up a second time.
+    """
+    if app is None:
+        app = running_app()
+    if app is None:
+        return []
+    if win is None:
+        win = find_window(on_screen=False)
     if win is None:
         return []
     err, ax_wins = _AS.AXUIElementCopyAttributeValue(

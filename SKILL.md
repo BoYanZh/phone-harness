@@ -401,7 +401,11 @@ events into it for hands. All coordinates are global macOS screen points.
   not, it presses Connect again. Do not press it yourself in a loop and do
   not tap the window (an interstitial is a Mac view; taps meant for the
   phone go nowhere). **Unlocking the physical phone pauses the session**
-  ("iPhone in Use") - the same rule applies. The Mac login prompt that
+  ("iPhone in Use") - the same rule applies mid-task. Taps, scrolls, swipes,
+  typing, key presses, `open_app`, `home`, and `screenshot` raise that same
+  message and do not press Connect. Ask the user to lock the phone, then
+  call `ensure_mirroring()` and continue from the step that raised.
+  The Mac login prompt that
   sometimes appears in the window is never typed into.
 - **Unfocused input is swallowed silently - for events you post yourself.**
   The helpers are immune in the background build, but raw CGEvents and the
