@@ -19,6 +19,7 @@ is no one to click Approve.
 Stdlib only. API reference: https://phone-harness.com/docs
 """
 import json
+import math
 import os
 import shutil
 import sys
@@ -36,6 +37,14 @@ READY_WAIT = 240      # seconds to wait for `ready` before giving the phone back
 LOW_TIME = 120        # warn the script when the session has less than this left
 # Named, because the sign-in host's CDN refuses urllib's default signature.
 USER_AGENT = "phone-harness-cli"
+
+
+class CloudPhoneError(RuntimeError):
+    """A cloud phone was attached and cannot be driven.
+
+    Callers must surface this. Returning None would look like no cloud phone
+    was ever attached, and the next line of code would drive a different one.
+    """
 
 
 class CloudError(RuntimeError):
@@ -88,7 +97,31 @@ def _state_path():
 
 
 def _load_state():
-    return config._read(_state_path(), {})
+    """The cloud state file, or {} when this machine has never had one.
+
+    A file that exists but cannot be read is an error. Treating it as empty
+    would drop the attached session and let a script drive some other phone.
+    """
+    path = _state_path()
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return {}
+    except OSError as e:
+        raise CloudPhoneError(
+            f"the cloud state file {path} is unreadable ({e}). "
+            "This did not fall back to another phone.") from None
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        raise CloudPhoneError(
+            f"the cloud state file {path} is unreadable ({e}). "
+            "This did not fall back to another phone.") from None
+    if not isinstance(data, dict):
+        raise CloudPhoneError(
+            f"the cloud state file {path} is unreadable (not an object). "
+            "This did not fall back to another phone.")
+    return data
 
 
 def _save_state(state):
@@ -285,6 +318,93 @@ def _find_recorded(state, pin):
     return hits[0] if len(hits) == 1 else None
 
 
+def _expired(sess):
+    return bool(sess and sess.get("expires_at") and time.time() >= sess["expires_at"])
+
+
+def _pin_hits(sid, pin):
+    return bool(sid and pin and (sid == pin or str(sid).startswith(pin)))
+
+
+def _quote_arg(name):
+    if name and all(c.isalnum() or c in "_.:+@-" for c in name):
+        return name
+    return '"' + str(name).replace('"', "") + '"'
+
+
+def _start_target(rec):
+    """The catalog name a later `cloud start` uses for this same phone.
+
+    None means a bare `cloud start` (the unnamed choice). A label or id is
+    what the catalog command accepts; `ios` / `android` only when that is
+    all we still know.
+    """
+    rec = rec or {}
+    sel = rec.get("selector") or ""
+    if sel == "unnamed":
+        return None
+    label = str(rec.get("label") or "").strip()
+    if label:
+        return _quote_arg(label)
+    device = str(rec.get("device_id") or "").strip()
+    if device:
+        return _quote_arg(device)
+    if sel.startswith("id:") and sel[3:].strip():
+        return _quote_arg(sel[3:].strip())
+    if sel.startswith("label:") and sel[6:].strip():
+        return _quote_arg(sel[6:].strip())
+    if sel == "temporary":
+        return None
+    platform = rec.get("platform")
+    if platform in ("ios", "android"):
+        return platform
+    return None
+
+
+def restart_command(rec):
+    """`cloud start` of the same phone, for a longer duration than the one that ended."""
+    target = _start_target(rec)
+    if target:
+        return f"phone-harness cloud start {target} --for <longer>"
+    return "phone-harness cloud start --for <longer>"
+
+
+def _ended_record(rec, cause, at=None):
+    rec = rec or {}
+    return {
+        "sid": rec.get("sid"),
+        "platform": rec.get("platform"),
+        "label": rec.get("label"),
+        "device_id": rec.get("device_id"),
+        "selector": rec.get("selector"),
+        "expires_at": rec.get("expires_at"),
+        "cause": cause,
+        "at": time.time() if at is None else at,
+    }
+
+
+def ended_message(rec):
+    """What a script should show, and the one next command.
+
+    Expiry is named `expired`. Anything else (the service lost the session,
+    the state file says it is gone) is named `failed` and `unreachable`.
+    The CLI does not rent a replacement itself.
+    """
+    rec = rec or {}
+    cause = "expired" if rec.get("cause") == "expired" or _expired(rec) else "unreachable"
+    sid = rec.get("sid") or "unknown"
+    if cause == "expired":
+        lead = f"session {sid} expired"
+    else:
+        lead = f"session {sid} failed: the cloud phone is unreachable"
+    cmd = restart_command(rec)
+    return (f"{lead}. This script did not switch to another phone. "
+            f"Start the same phone again for longer and continue the task: `{cmd}`. "
+            "Replace <longer> with a duration longer than the session that just ended "
+            "(`90s`, `15m`, or a number of minutes). "
+            "The CLI does not rent a phone by itself.")
+
+
 def attached(kind=None):
     """The session the helpers should drive, or None; with `kind`, only a
     session reached that way.
@@ -292,28 +412,34 @@ def attached(kind=None):
     `PHONE_HARNESS_SESSION` (or `--session`, which sets it) pins one session
     for this process, so parallel agents do not share the state file's
     fallback. With neither, the fallback is the attached session a person at
-    a terminal last started or `cloud use`d. The unpinned read does no
-    network and never raises. A pin that is not on disk is fetched once."""
-    try:
-        state = _load_state()
-    except Exception:
-        state = {}
+    a terminal last started or `cloud use`d. A pin that is not on disk is
+    fetched once.
+
+    None means no cloud phone was attached. A pin whose session has expired
+    raises `session <sid> expired` instead of returning None, and an
+    unreadable state file raises too: both used to look like "no cloud phone"
+    and the next call drove a different device. An unpinned session whose
+    clock has run out still returns None; `lost()` tells `connect` to raise.
+    """
+    state = _load_state()
     pin = os.environ.get("PHONE_HARNESS_SESSION")
     if pin:
         raw = _find_recorded(state, pin)
         sess = _as_linked(raw)
         if sess is None:
+            gone = state.get("gone")
+            if isinstance(gone, dict) and _pin_hits(gone.get("sid"), pin):
+                raise CloudPhoneError(ended_message(gone))
             sess = _pull_pinned(pin)
+        if _expired(sess):
+            raise CloudPhoneError(ended_message(_ended_record(sess, "expired")))
     else:
-        try:
-            sess = _as_linked(state.get("session"))
-        except Exception:
-            return None
+        sess = _as_linked(state.get("session"))
     if sess is None:
         return None
     if kind not in (None, sess["link"]["kind"]):
         return None
-    if sess.get("expires_at") and time.time() >= sess["expires_at"]:
+    if _expired(sess):
         return None
     return sess
 
@@ -353,12 +479,26 @@ def _keeps_state(session):
     return bool(session.get("profile"))
 
 
+def _iphone_words(label):
+    """'your iPhone', plus a label only when the label is not itself 'iPhone'.
+
+    The catalog name for the one phone on an account is often just iPhone, and
+    'your iPhone, iPhone' says the same thing twice."""
+    text = " ".join(str(label).split()) if label else ""
+    if text.lower() in {"", "iphone", "your iphone"}:
+        return "your iPhone"
+    return f"your iPhone, {text}"
+
+
 def _kind_of_phone(session, label=None):
     """Wording for a session, from its link. A control link is an iPhone."""
     if _link_kind(session) == "control":
-        label = label or session.get("label")
-        return f"your iPhone, {label}" if label else "your iPhone"
-    return "your phone" if session.get("profile") else "temporary"
+        if label is None:
+            label = session.get("label")
+        return _iphone_words(label)
+    if session.get("profile") or session.get("profile_id"):
+        return "your phone"
+    return "temporary"
 
 
 def _adb_present():
@@ -426,7 +566,8 @@ def _session_record(session, selector=None, label=None):
 def _store_session(record, make_attached=True):
     """Remember a session. `make_attached` updates the terminal fallback.
     Every remembered session stays addressable by `--session`, so a later
-    start does not forget the previous phone."""
+    start does not forget the previous phone. Storing one clears a previous
+    "gone" mark: the user has a phone again."""
     state = _load_state()
     sessions = _known_sessions(state)
     sessions[record["sid"]] = record
@@ -435,6 +576,7 @@ def _store_session(record, make_attached=True):
         state["session"] = record
     if make_attached and record.get("profile"):
         state["profile_id"] = record["profile"]
+    state.pop("gone", None)
     _save_state(state)
     if record["link"]["kind"] == "adb":
         ensure_connected(record, quiet=True)
@@ -469,7 +611,15 @@ def _pull_pinned(pin):
     return _store_session(_session_record(session), make_attached=False)
 
 
-def _detach(sid=None):
+def _detach(sid=None, gone=False):
+    """Forget a remembered session.
+
+    `gone=True` means the service lost the attached one (it failed, or it
+    expired) rather than the user ending it. That session is remembered
+    under "gone" so the helpers refuse to run instead of driving the phone
+    on this machine. A plain detach (the user's `cloud stop`) clears that
+    too. Other remembered sessions stay addressable by `--session`.
+    """
     state = _load_state()
     sessions = _known_sessions(state)
     current = state.get("session") if isinstance(state.get("session"), dict) else None
@@ -478,6 +628,7 @@ def _detach(sid=None):
         sids = [targeted["sid"]] if targeted and targeted.get("sid") else []
     else:
         sids = [sid]
+    removed_attached = None
     for target in sids:
         rec = _as_linked(sessions.get(target))
         if rec is None and current and current.get("sid") == target:
@@ -490,13 +641,36 @@ def _detach(sid=None):
                 pass
         sessions.pop(target, None)
         if current and current.get("sid") == target:
+            if gone:
+                removed_attached = rec or current
             state.pop("session", None)
             current = None
     if sessions:
         state["sessions"] = sessions
     else:
         state.pop("sessions", None)
+    if gone and removed_attached:
+        cause = "expired" if _expired(removed_attached) else "unreachable"
+        state["gone"] = _ended_record(removed_attached, cause)
+    if not gone:
+        state.pop("gone", None)
     _save_state(state)
+
+
+def lost():
+    """A session that was attached and is no longer usable, or None.
+
+    Either the service said it was gone, or its expiry passed while it was
+    still attached. `cause` is `expired` or `unreachable`. No network. An
+    unreadable state file raises; it is not "no session"."""
+    state = _load_state()
+    gone = state.get("gone")
+    if isinstance(gone, dict) and gone.get("sid"):
+        return gone
+    sess = state.get("session") if isinstance(state.get("session"), dict) else None
+    if _expired(sess):
+        return _ended_record(sess, "expired", at=sess.get("expires_at"))
+    return None
 
 
 # --- small things ------------------------------------------------------------
@@ -532,10 +706,20 @@ def _money(cents):
 
 
 def _left(expires_at):
+    """How long the session has left, for a person reading it.
+
+    Minutes round up. `cloud start --for 6` still says 6 min after the phone
+    spends part of that first minute booting; flooring made it say 5. Under
+    two minutes the exact seconds stay.
+    """
     if not expires_at:
         return "?"
-    s = int(expires_at - time.time())
-    return "expired" if s <= 0 else f"{s // 60} min" if s >= 120 else f"{s}s"
+    remaining = expires_at - time.time()
+    if remaining <= 0:
+        return "expired"
+    if remaining < 120:
+        return f"{int(remaining)}s"
+    return f"{math.ceil(remaining / 60)} min"
 
 
 def _ago(ts):
@@ -771,8 +955,7 @@ def _needs_adb(entry, me):
 def _starting_line(entry, me):
     shown = entry if entry is not None else _unnamed(me)
     if shown and shown.get("platform") == "ios":
-        label = shown.get("label") or shown.get("id") or ""
-        return f"Starting your iPhone{', ' + label if label else ''}…"
+        return "Starting " + _iphone_words(shown.get("label") or shown.get("id") or "") + "…"
     if shown and shown.get("temporary"):
         return "Starting a temporary phone…"
     if shown and shown.get("label"):
@@ -852,6 +1035,8 @@ def _reusable(selector):
     still provisioning or ready. None when this start should create one."""
     try:
         state = _load_state()
+    except CloudPhoneError:
+        raise
     except Exception:
         return None
     seen = set()
@@ -948,6 +1133,8 @@ def _start(args):
     # Another session may keep running. Say so, and how to aim at it again.
     try:
         previous = _as_linked(_load_state().get("session"))
+    except CloudPhoneError:
+        raise
     except Exception:
         previous = None
     if previous and previous.get("selector") != selector:
@@ -1068,7 +1255,11 @@ def _status(args):
     print(f"signed in   {me.get('email') or me.get('uid')}")
     print(f"credit      {_credit(me)}")
     profile = me.get("profile") or {}
-    sess = attached()
+    try:
+        sess = attached()
+    except CloudPhoneError as e:
+        print(e)
+        return 1
     live = None
     if sess:
         try:
@@ -1082,14 +1273,19 @@ def _status(args):
         profile = {**profile, "state": "saving"}
     print(f"phone       {_describe_profile(profile)}")
     if not sess:
+        lost_rec = lost()
+        if lost_rec:
+            print(ended_message(lost_rec))
+            return 1
         running = me.get("active_session_count") or 0
         print("session     none attached" + (f" ({running} running: `phone-harness cloud ls`)"
                                               if running else " — `phone-harness cloud start`"))
         return 0
     if live is None:
-        print(f"session     {sess['sid']} is gone; detaching")
-        _detach()
-        return 0
+        cause = "expired" if _expired(sess) else "unreachable"
+        print(ended_message(_ended_record(sess, cause)))
+        _detach(gone=True)
+        return 1
     state = ("closing — saving the phone"
              if live["state"] == "closing" and _keeps_state(live)
              else live["state"])
@@ -1100,29 +1296,100 @@ def _status(args):
     return 0
 
 
-def _session_key(session):
-    """The catalog id a live session belongs to: its device id or its profile."""
-    phone = session.get("phone")
-    if session.get("device_id"):
-        return session["device_id"]
-    if isinstance(phone, str) and phone:
-        return phone
-    return session.get("profile") or None
+def _text_id(value):
+    """An id string, or the id inside a small object. Display text is not an id."""
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, dict):
+        for key in ("id", "device_id", "profile_id"):
+            found = _text_id(value.get(key))
+            if found:
+                return found
+    return None
+
+
+def _id_set(mapping, keys):
+    found = set()
+    if not isinstance(mapping, dict):
+        return found
+    for key in keys:
+        text = _text_id(mapping.get(key))
+        if text:
+            found.add(text)
+    return found
+
+
+# `phone` used to be a saved-phone id. The live API also puts a display name
+# there ("iPhone", "Android emulator"); those are not catalog ids.
+_PHONE_DISPLAY_NAMES = {"iphone", "android", "android emulator", "your iphone", "your phone"}
+
+
+def _session_ids(session):
+    """device ids and profile ids this session holds.
+
+    `profile` is the older name for `profile_id`. A string `phone` counts only
+    when it is an id, not the display name."""
+    devices = _id_set(session, ("device_id",))
+    profiles = _id_set(session, ("profile_id", "profile"))
+    phone = _text_id(session.get("phone"))
+    if phone and phone.lower() not in _PHONE_DISPLAY_NAMES and phone not in devices:
+        profiles.add(phone)
+    return devices, profiles
 
 
 def _session_on_entry(entry, session):
     """True when this live session is that catalog phone.
 
-    An entry with an id matches the session's device id or profile. A
-    temporary entry has no id; a session with no device and no profile, on
-    the same platform, is that throwaway phone."""
-    key = _session_key(session)
-    if entry.get("id"):
-        return key == entry["id"]
-    if not entry.get("temporary") or key is not None or _link_kind(session) == "control":
-        return False
-    platform = entry.get("platform")
-    return not platform or session.get("platform") in (None, platform)
+    Match by device_id or profile_id (a catalog row keeps that id on `id`,
+    `device_id`, or `profile_id`). A temporary row, which names neither, is
+    the session that also names neither. Anything else is not this row.
+    An iPhone session does not carry the catalog id: `device` is the display
+    word "iPhone". That case is decided in `_inline_running`."""
+    devices, profiles = _session_ids(session)
+    entry_ids = _id_set(entry, ("id", "device_id", "profile_id"))
+    if (devices | profiles) & entry_ids:
+        return True
+    if entry.get("temporary") and not entry_ids and not devices and not profiles:
+        if _link_kind(session) == "control" or session.get("platform") == "ios":
+            return False
+        platform = entry.get("platform")
+        return not platform or session.get("platform") in (None, platform)
+    return False
+
+
+def _inline_running(entries, rows, sessions, used, blob, mine):
+    """Put one unmatched live session on the one catalog phone that is running.
+
+    A cloud iPhone session does not echo the catalog id. It carries
+    `platform`, `kind`, `device` set to the word "iPhone", and a `profile`
+    like `iphone-…` that matches no catalog row. Any session whose
+    device_id or profile matched no row is unmatched, even when those fields
+    are set. When exactly one entry of that platform and kind is `running`,
+    and exactly one unmatched session has that same platform and kind, the
+    session is that row.
+    """
+    for entry, row in zip(entries, rows):
+        if row.get("session") or entry.get("state") != "running":
+            continue
+        platform, kind = entry.get("platform"), entry.get("kind")
+        if not platform or not kind:
+            continue
+        running = [e for e in entries
+                   if e.get("platform") == platform and e.get("kind") == kind
+                   and e.get("state") == "running"]
+        if len(running) != 1:
+            continue
+        candidates = [s for s in sessions
+                      if s.get("id") not in used
+                      and s.get("platform") == platform
+                      and s.get("kind") == kind]
+        if len(candidates) != 1:
+            continue
+        match = candidates[0]
+        used.add(match["id"])
+        row["session"] = blob(match)
+        row["targeted"] = match.get("id") == mine
 
 
 def _ls_rows(me, sessions):
@@ -1149,21 +1416,23 @@ def _ls_rows(me, sessions):
         rows.append({
             "label": entry.get("label") or "",
             "platform": entry.get("platform"),
-            "id": entry.get("id"),
+            "id": entry.get("id") or entry.get("device_id") or entry.get("profile_id"),
             "state": entry.get("state"),
             "temporary": bool(entry.get("temporary")),
             "session": session_blob(match) if match else None,
             "targeted": bool(match and match.get("id") == mine),
         })
+    _inline_running(catalog, rows, sessions, used, session_blob, mine)
     for s in sessions:
         if s.get("id") in used:
             continue
+        named, _profiles = _session_ids(s)
         rows.append({
             "label": s.get("device") or s.get("label") or "session",
             "platform": s.get("platform"),
             "id": None,
             "state": s.get("state"),
-            "temporary": not s.get("profile") and _link_kind(s) != "control",
+            "temporary": not named and not _profiles and _link_kind(s) != "control",
             "session": session_blob(s),
             "targeted": s.get("id") == mine,
             "unmatched": True,

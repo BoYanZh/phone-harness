@@ -12,7 +12,7 @@ sys.path.insert(0, str(SRC))
 from phone_harness.run import _skill_text, _write_utf8  # noqa: E402
 from phone_harness.android import CLI_USAGE as ANDROID_USAGE  # noqa: E402
 from phone_harness.cloud import CLI_USAGE as CLOUD_USAGE  # noqa: E402
-from phone_harness.config import CLI_USAGE as CONFIG_USAGE  # noqa: E402
+from phone_harness.config import CLI_USAGE as CONFIG_USAGE
 from phone_harness.run import USAGE  # noqa: E402
 
 

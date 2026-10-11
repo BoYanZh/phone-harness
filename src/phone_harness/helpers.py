@@ -1,7 +1,12 @@
 """Phone control — one flat API over any device.
 
 Core helpers live here. Agent-editable helpers live in
-PH_AGENT_WORKSPACE/agent_helpers.py (defaults to <repo>/agent-workspace).
+PH_AGENT_WORKSPACE/agent_helpers.py. A checkout uses
+<repo>/agent-workspace. A pip or uv install uses
+~/.phone-harness/agent-workspace, or
+~/.local/share/phone-harness/agent-workspace when ~/.phone-harness is
+itself a git checkout. That directory is created from the packaged
+defaults when it is missing; an existing one is left alone.
 
 Everything below is a thin wrapper over send(), which is defined first on
 purpose: the helpers are conveniences, not a wall. Drop to send() for anything
@@ -13,16 +18,16 @@ live inside one backend each, behind the ops documented in transport.py, so
 `nav.home` and `screen.text` mean the same thing everywhere even though an
 iPhone answers them with a Cmd+1 keystroke and Vision OCR.
 """
-import hashlib, importlib.util, os, time
+import hashlib, importlib.util, time
 from pathlib import Path
 
 from . import transport
 from .transport import Unsupported          # re-exported for agent scripts
+from .workspace import agent_workspace, repo_root
 
 CORE_DIR = Path(__file__).resolve().parent
-REPO_ROOT = CORE_DIR.parent.parent
-AGENT_WORKSPACE = Path(
-    os.environ.get("PH_AGENT_WORKSPACE", REPO_ROOT / "agent-workspace"))
+REPO_ROOT = repo_root()
+AGENT_WORKSPACE = agent_workspace()
 
 # The default device. connect() returns a fresh backend, so a script needing
 # two phones at once can hold them side by side instead of being limited to
@@ -57,14 +62,18 @@ def connection_state():
 
     On iPhone Mirroring: 'ready' | 'blocked' | 'no-window' | 'not-running',
     where 'blocked' means an interstitial is up and nothing should be tapped
-    or typed until the user clears it.
+    or typed until it is cleared — ensure_device() tries that once.
     """
     return send("session.state")
 
 
 def ensure_device():
-    """Screen bounds if the device is usable, else raise telling the user what
-    they physically need to do. Never reconnects — that is the user's job."""
+    """Screen bounds once the device is usable, else raise telling the user
+    what they physically need to do.
+
+    On iPhone Mirroring this launches the app if it is not running and
+    presses the interstitial's Connect once; what it cannot clear (an
+    unlocked phone, a login prompt) comes back as the error text."""
     return send("session.require")
 
 

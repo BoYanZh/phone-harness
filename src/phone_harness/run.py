@@ -20,6 +20,7 @@ Commands:
   phone-harness android ... pair/connect/choose an Android phone
   phone-harness cloud ...   rent a catalog phone: `cloud login`, `cloud ls`, `cloud start [PHONE]`
   phone-harness config ...  settings: `config set platform android`
+  phone-harness update      update this install: uv tool upgrade, git pull, or the pip command
 
 --session SID (or PHONE_HARNESS_SESSION) selects one rented phone. With neither,
 a script follows the attached session.
@@ -129,7 +130,7 @@ def _telemetry_command(args):
         return "help"
     if first in {"--doctor", "doctor"}:
         return "doctor"
-    if first in {"android", "cloud", "config", "skill"}:
+    if first in {"android", "cloud", "config", "skill", "update"}:
         return first
     return "usage"
 
@@ -174,6 +175,13 @@ def _exit_code(code):
 def main():
     global _helper_call_count
     args = sys.argv[1:]
+    # Once a day, on a terminal. Never delays or fails the command.
+    if args[:1] != ["update"]:
+        try:
+            from .update import maybe_notify
+            maybe_notify()
+        except Exception:
+            pass
     _helper_trace.clear()
     _helper_call_count = 0
     start_time = time.monotonic()
@@ -280,6 +288,9 @@ def _run(args):
     if args and args[0] == "config":
         from .config import cli
         sys.exit(cli(args[1:]))
+    if args and args[0] == "update":
+        from .update import cmd_update
+        sys.exit(cmd_update(args[1:]))
     if args and args[0] == "skill":
         _write_utf8(_skill_text())
         return

@@ -16,9 +16,19 @@ of you.
 | Phone | How it is reached | Eyes | Hands | Read |
 | --- | --- | --- | --- | --- |
 | **Cloud Android** - rented from Phone Harness Cloud, the user's own saved phone | `phone-harness cloud start` connects it; nothing to export | accessibility tree (exact), Vision OCR fallback on a Mac | adb `input` | Working method, then **Cloud phones** and **Android** |
-| **Cloud iPhone** - an iOS entry in the account catalog | `phone-harness cloud start` with its id, label, or `ios` when that is the only one | server-side OCR (`source: "pixels"`), from any OS | ops over HTTPS | Working method, then **Cloud iPhone** |
+| **Cloud iPhone** - a second iPhone hosted by Phone Harness Cloud, not the one in the user's pocket; an iOS entry in the account catalog | `phone-harness cloud start` with its id, label, or `ios` when that is the only one | server-side OCR (`source: "pixels"`), from any OS | ops over HTTPS | Working method, then **Cloud iPhone** |
 | **Android on the desk** - USB or paired Wi-Fi | the harness finds it | accessibility tree (exact), Vision OCR fallback on a Mac | adb `input` | Working method, then **Android** |
-| **iPhone** - through the Mac's iPhone Mirroring window | the user connects it | screenshots + Vision OCR | HID-level CGEvents into the window | Working method, then **iPhone** |
+| **Personal iPhone** - the user's own phone, through the Mac's iPhone Mirroring window | the harness opens Mirroring and presses Connect; the user locks the phone | screenshots + Vision OCR | HID-level CGEvents into the window | Working method, then **iPhone** |
+
+**"My phone" means the personal one.** The personal iPhone and the cloud
+iPhone are two different devices with different apps and logins: the first is
+in the user's pocket and mirrored onto the Mac, the second lives in a data
+centre and is reached over HTTPS. When the user says "my phone", "my iPhone",
+or names an app they use, drive the personal iPhone. Use a cloud phone only
+when the user names it ("the cloud phone", `cloud start`) or the task is
+clearly about it. If the personal phone cannot be reached, say so and ask;
+never fall through to a cloud session that happens to be running, even one
+the user started - it is theirs, and it is a different phone.
 
 `phone-harness config` shows the default platform (`ios` on a Mac, `android`
 elsewhere) and every other setting. `phone-harness cloud` shows whether a cloud
@@ -67,7 +77,15 @@ PY
      faster than a call per turn. Keep one cheap check at the end.
   4. When a check fails, isolate: re-run that one action, look at the screen,
      form one guess, test it. Do not re-run the batch hoping it lands.
-  5. Keep what you learn in `agent-workspace/agent_helpers.py`.
+  5. Keep what you learn in the agent workspace's `agent_helpers.py`.
+     A checkout uses `agent-workspace/`. A pip or uv install uses
+     `~/.phone-harness/agent-workspace`, or
+     `~/.local/share/phone-harness/agent-workspace` when
+     `~/.phone-harness` is a git checkout, so an upgrade does not wipe
+     it. `PH_AGENT_WORKSPACE` overrides that path. The directory is
+     created from the defaults only when it is missing. An existing
+     workspace is never overwritten. To get a fresh default, delete the
+     workspace folder; it is recreated on the next run.
 - **The harness reports, you decide.** Helpers return observations, never a
   verdict on your intent. Diff two `ocr()` sets, watch one label, count rows,
   poll until something appears - whatever matches what you asked for.
@@ -96,11 +114,14 @@ PY
   following, purchasing, deleting, changing settings. Never type a PIN, a
   password or a 2FA code; on a cloud phone, hand the controls over instead
   (`phone-harness cloud open`, below).
-- **Connection is the user's job.** Pairing, unlocking, tapping Allow,
-  locking an iPhone that says "iPhone in Use", approving a cloud sign-in in
-  the browser: when the harness says the phone is not reachable, relay its
-  message and ask - never tap through a Connect screen and never loop-poll.
-  Retry once after the user says it is done.
+- **The harness reconnects what it can; the rest is the user's.** On a
+  personal iPhone, start the task with `ensure_mirroring()`: it opens iPhone
+  Mirroring if it is closed, presses the window's Connect once, and brings
+  the window to the front so the user can watch. Pairing, unlocking, tapping Allow,
+  locking an iPhone that says "iPhone in Use" or "Timed Out", approving a
+  cloud sign-in in the browser: when the harness still says the phone is not
+  reachable, relay its message and ask - never loop-poll. Retry once after
+  the user says it is done; that retry presses Connect again.
 
 ## Cloud phones
 
@@ -108,8 +129,15 @@ There are two things. A **phone** is a row in the account catalog (`GET /me`
 -> `available`): a label, a platform, an id, and whether it is a temporary
 phone. The service keeps no default phone; a preference is the chooser's. A **session** is one of those phones rented right now.
 `cloud ls` prints one row per catalog phone and writes any live session on
-that row (`*` is the session this process targets). A running session that
-matches no row is still listed.
+that row (`*` is the session this process targets). A session lines up with
+the row that has the same device_id or profile_id; a session with neither
+lines up with the temporary row. A cloud iPhone session does not echo that
+id: its `device` is the word "iPhone", and its `profile` (`iphone-...`) matches
+no catalog row. The catalog row's `state` is `running` while a session holds
+it. A session whose ids match no row counts as unmatched. When exactly one
+row of that platform and kind is `running` and exactly one unmatched session
+has that same platform and kind, the session is written on that row. A
+session that still matches nothing is listed on its own.
 
 `cloud start` with no name starts this machine's `cloud.phone` setting
 (`config set cloud.phone "Desk phone"`) when one is set; otherwise it sends
@@ -175,6 +203,20 @@ phone-harness cloud open                     # the dashboard: the user takes the
 - **`cloud phone` is the saved Android only** (`GET /me/profile`).
   `cloud phone reset --yes` wipes that phone's stored state: apps, logins,
   and data. The CLI has no iPhone reset; that is the operator's.
+- **A cloud session that ends does not hand you another phone.** If the
+  session attached to this script expires, the error says `session <sid> expired`.
+  If the service loses it, the error says the cloud phone failed and is
+  unreachable. Either way the script stops. It does not drive the personal
+  phone, and the CLI does not rent a replacement. Start the same catalog
+  phone again with a longer duration and continue the task:
+  `phone-harness cloud start <same phone> --for <longer>`. `<same phone>` is
+  that phone's id or label (or `ios` / `android` when only one entry has that
+  platform). `<longer>` is a duration longer than the session that just
+  ended (`90s`, `15m`, or a number of minutes). A `--session` pin whose
+  session expired is the same error, naming that sid. A missing cloud state
+  file still means no cloud phone was attached, and the personal phone is
+  used as today. An unreadable state file is an error, not a cue to switch
+  phones. `cloud stop` clears the failure; a new `cloud start` does too.
 - The adb address the CLI shows is not a secret; the unlock code is. Do not
   look for it, print it, or ask the user for it.
 
@@ -185,9 +227,11 @@ unambiguous, or the entry's id or label (`cloud ls`). The create body is
 `platform: "ios"`, `kind: "device"`, and `device_id` set to that entry's id.
 A ready session carries `control: {url, token, expires_at}` and no `adb`.
 From then on the helpers drive it over HTTPS. This machine needs no adb, no
-shell, and no Mac. `cloud stop` ends billing and returns at once; the phone
-keeps its own data. There is no Android-style disk save, and nothing on this
-phone for `cloud phone` to wipe.
+shell, and no Mac. It is a phone granted to the user's account and kept
+between sessions - not the personal iPhone mirrored on the Mac, which is a
+different device with its own apps and logins. `cloud stop` ends billing
+and returns at once; the phone keeps its own data. There is no Android-style
+disk save, and nothing on this phone for `cloud phone` to wipe.
 
 An Android session can stay up beside it. Target one with `--session SID`.
 `cloud use SID` only changes the terminal fallback.
@@ -332,6 +376,11 @@ PY
 - Connecting a desk phone is the user's job (USB debugging + Allow, or
   Wireless debugging + `phone-harness android pair CODE`); on `no-device` the
   error names the missing step - relay it, don't retry-loop.
+- **A saved primary that is unreachable is a failure, not a different phone.**
+  If `phone-harness android use` has named a primary and that phone cannot
+  be reached, the error says the primary is unreachable. Do not expect the
+  harness to connect some other paired or mDNS phone instead. When no
+  primary is configured, a USB phone that is plugged in is still used.
 
 ## iPhone (iPhone Mirroring)
 
@@ -339,8 +388,15 @@ The Mac's iPhone Mirroring app renders the phone as a window; the harness
 captures that window and OCRs it with Vision for eyes, and posts HID-level
 events into it for hands. All coordinates are global macOS screen points.
 
-- `ensure_mirroring()` launches the window and gates on connection. The
-  default build works the phone **without taking the user's focus**: capture
+- **Start every task with `ensure_mirroring()`.** It opens iPhone Mirroring
+  if it is not running, brings the window to the front so the user sees what
+  you see, presses the interstitial's Connect once through accessibility,
+  and waits for the live stream. A phone that is in use shows up within
+  about three seconds and it raises then, with the window's own words,
+  rather than sitting out a timeout. It is the cheapest first line a script
+  can have: a phone that cannot be driven fails there, not five taps in.
+  Call it once in the first script of a task, not before every action.
+  After that, the default build works the phone **without taking the user's focus**: capture
   is by window id and taps and keystrokes are event records delivered straight
   to the app. Scrolling is the exception - macOS routes a scroll to whichever
   window sits under the pointer, so a scroll raises the mirroring window for
@@ -369,13 +425,22 @@ events into it for hands. All coordinates are global macOS screen points.
   Pass `keystrokes=True` for fields that need real key events. The typed text
   stays on the Mac clipboard afterwards. If a tap will not take focus,
   `press("tab")` moves between fields.
-- **Connecting is the user's job, and so is resuming.** `ensure_mirroring()`
-  raises a clear message when the phone is not connected (`connection_state()`
-  is `ready` / `blocked` / `no-window` / `not-running`). **STOP and relay it.**
-  Never tap `Connect` / `Continue` and never loop-poll: tapping Connect while
-  the phone is unlocked does nothing, and the only fix is the user locking or
-  connecting the phone. **Unlocking the physical phone pauses the session**
-  ("iPhone in Use") - do not tap through the resume screen.
+- **What the harness cannot clear is physical.** Connect only works while
+  the iPhone is locked; "iPhone in Use" and "Timed Out ... due to iPhone use"
+  mean it was not. `ensure_mirroring()` presses Connect once and then raises
+  quoting the screen (`connection_state()` is `ready` / `blocked` /
+  `no-window` / `not-running`). **STOP and relay it**, ask the user to lock
+  the phone, and retry once when they say so. The app reconnects by itself
+  the moment the phone is locked, so the retry usually finds it live; if
+  not, it presses Connect again. Do not press it yourself in a loop and do
+  not tap the window (an interstitial is a Mac view; taps meant for the
+  phone go nowhere). **Unlocking the physical phone pauses the session**
+  ("iPhone in Use") - the same rule applies mid-task. Taps, scrolls, swipes,
+  typing, key presses, `open_app`, `home`, and `screenshot` raise that same
+  message and do not press Connect. Ask the user to lock the phone, then
+  call `ensure_mirroring()` and continue from the step that raised.
+  The Mac login prompt that
+  sometimes appears in the window is never typed into.
 - **Unfocused input is swallowed silently - for events you post yourself.**
   The helpers are immune in the background build, but raw CGEvents and the
   `PHONE_HARNESS_BACKGROUND=0` path need the window frontmost: `activate()`
@@ -394,5 +459,26 @@ events into it for hands. All coordinates are global macOS screen points.
   path, and where they land is its own question per event type. Check what
   actually happened on screen rather than assuming the event arrived.
 
-For task-specific edits, use `agent-workspace/agent_helpers.py`. For setup or
-permission problems, read `install.md`.
+For task-specific edits, use the agent workspace's `agent_helpers.py`:
+`agent-workspace/` in a checkout, `~/.phone-harness/agent-workspace` for
+a pip or uv install (or `~/.local/share/phone-harness/agent-workspace`
+when `~/.phone-harness` is a git checkout). `PH_AGENT_WORKSPACE`
+overrides that. Installs seed that directory from the packaged defaults
+when it does not exist yet; an existing workspace is left as it is.
+To get a fresh default, delete the workspace folder; it is recreated
+on the next run. For setup or permission problems, read `install.md`.
+
+## Updates
+
+`phone-harness update` brings this install up to date. A uv tool runs
+`uv tool upgrade phone-harness`. A git checkout runs `git pull --ff-only`
+in that checkout. Anything else prints `pip install -U phone-harness` and
+does not run it. The CLI never updates itself. Once a day, on a terminal,
+it may print one stderr line when PyPI has a newer version:
+
+```
+phone-harness X.Y.Z is available (you have A.B.C): run phone-harness update
+```
+
+Relay that line to the user. `PHONE_HARNESS_NO_UPDATE_CHECK=1` turns the
+notice off. A network problem never fails the command.

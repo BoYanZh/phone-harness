@@ -60,6 +60,11 @@ PY
 
 Helpers are pre-imported. [SKILL.md](SKILL.md) is the agent's day-to-day
 guide; [helpers.py](src/phone_harness/helpers.py) is the full list.
+Task-specific helpers live in `agent-workspace/agent_helpers.py` in a
+checkout. A pip or uv install uses `~/.phone-harness/agent-workspace`
+(see [install.md](install.md)), creates it from the packaged defaults
+when it is missing, and never overwrites an existing one. Delete that
+folder for a fresh default; the next run recreates it.
 
 ## No phone on your desk? Rent one
 
@@ -75,7 +80,13 @@ phone-harness cloud stop             # billing stops; a saved Android is written
 ```
 
 `cloud ls` is the catalog (`GET /me` → `available`): each phone's label,
-platform, and id, with a live session on that row. `cloud start` with no name
+platform, and id, with a live session on that row (matched by device id,
+profile id, or the temporary row). A cloud iPhone session does not echo its
+catalog id (`device` is the word "iPhone", and `profile` is an `iphone-…` id
+that matches no catalog row). That session is written on the one catalog row
+of the same platform and kind whose `state` is `running`, when that is the
+only such row and the only unmatched session of that platform and kind. A
+session that matches nothing is its own row. `cloud start` with no name
 starts this machine's `cloud.phone` setting if one is set, else what the
 service gives an unnamed start, a temporary Android. A name is a catalog id or label, or `ios` /
 `android` when only one entry has that platform. A [cloud Android](https://phone-harness.com/cloud)
@@ -84,6 +95,15 @@ no shell: the helpers POST ops over HTTPS, OCR runs on the host, and driving
 it is in [SKILL.md](SKILL.md). `phone-harness cloud` lists the rest, including
 `watch`, `open`, `history`, and `phone` for the saved Android. `--session SID`
 (or `PHONE_HARNESS_SESSION`) pins one rented phone for this process.
+
+## Updates
+
+`phone-harness update` upgrades a [uv](https://docs.astral.sh/uv/) tool
+(`uv tool upgrade phone-harness`) or a git checkout (`git pull --ff-only`).
+Any other install prints `pip install -U phone-harness` and leaves it for
+you to run. The tool never updates itself. On a terminal, once a day, it
+prints one line on stderr when PyPI has a newer version. Set
+`PHONE_HARNESS_NO_UPDATE_CHECK=1` to silence that notice.
 
 ## How it works
 

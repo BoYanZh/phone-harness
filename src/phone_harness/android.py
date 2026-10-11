@@ -13,10 +13,13 @@ Connecting is the phone's own developer path, over USB or Wi-Fi:
     Wireless  Developer options > Wireless debugging > Pair device with
               pairing code, then:  phone-harness android pair CODE
 
-The agent never picks a device. session.require — which every helper passes
-through — resolves one: a USB phone if one is plugged in, else a live
-wireless link (the saved primary first), else a paired phone found on the
-LAN over mDNS and connected on the spot, else a message naming the physical
+The agent never picks a device. session.require, which every helper passes
+through, resolves one: an explicit ANDROID_SERIAL, else a cloud phone from
+`cloud start`, else the saved primary and only that phone. If a primary is
+set and cannot be reached, this fails and says it is unreachable instead of
+connecting a different paired or mDNS phone. When no primary is configured,
+a USB phone that is plugged in is used, else a live wireless link, else a
+paired phone found on the LAN over mDNS, else a message naming the physical
 step that is missing. Paired phones are
 remembered (see config.py: the devices state file) under a friendly name and
 matched by hardware serial, so a phone whose Wi-Fi port changed overnight is
@@ -110,6 +113,21 @@ def _prop(adb_id, name):
     return _run("-s", adb_id, "shell", "getprop", name, timeout=15).strip()
 
 
+def _ready_id_for_serial(serial):
+    """The adb id of a device that is already up and has this hardware serial."""
+    if not serial:
+        return None
+    for adb_id, state, _transport in _attached():
+        if state != "device":
+            continue
+        try:
+            if _prop(adb_id, "ro.serialno") == serial:
+                return adb_id
+        except RuntimeError:
+            pass
+    return None
+
+
 def _mdns(kind="connect"):
     """Phones announcing themselves on the LAN: [{serial, host, port, addr}]
     for _adb-tls-connect services (paired phones with Wireless debugging on)
@@ -170,6 +188,10 @@ class TreeUnavailable(RuntimeError):
     """uiautomator would not dump this screen; retrying will not change that."""
 
 
+class PrimaryUnreachable(RuntimeError):
+    """The saved primary phone is not reachable. Not a cue to use another."""
+
+
 class Android(Backend):
     name = "android"
 
@@ -212,15 +234,16 @@ class Android(Backend):
     # --- choosing the phone -------------------------------------------------
 
     def _resolve(self):
-        """Pin ANDROID_SERIAL to one ready device, connecting a paired phone
-        over Wi-Fi if nothing is attached. Returns the adb id or None.
+        """Pin ANDROID_SERIAL to one ready device. Returns the adb id, or
+        None when no phone is configured and none is plugged in.
 
         Order: the user's explicit ANDROID_SERIAL; then a phone rented with
-        `phone-harness cloud start` (asked for by name, and paid for by the
-        minute); then a USB phone (wired
-        always wins — it is right there); then a live Wi-Fi link, the saved
-        primary first; then mDNS — the primary if it is on the LAN, else the
-        first known phone, else any paired phone."""
+        `phone-harness cloud start`; then, when a primary is saved, only that
+        phone. A different paired or mDNS phone is not a stand-in: if the
+        primary cannot be reached this raises. When no primary is configured,
+        a USB phone wins, then a live Wi-Fi link, then any paired phone mDNS
+        can see.
+        """
         if os.environ.get("ANDROID_SERIAL"):
             self._resolved = True
             return os.environ["ANDROID_SERIAL"]
@@ -232,37 +255,11 @@ class Android(Backend):
             self._resolved = True
             return os.environ["ANDROID_SERIAL"]
         cfg = _load()
-        primary = (cfg.get("phones") or {}).get(cfg.get("primary") or "", {})
+        primary_name = cfg.get("primary") or ""
+        primary = (cfg.get("phones") or {}).get(primary_name, {}) if primary_name else {}
         known = {p.get("serial") for p in (cfg.get("phones") or {}).values()}
 
-        def pick(ready):
-            usb = [r for r in ready if r[2] == "usb"]
-            if usb:
-                return usb[0][0]
-            wifi = [r for r in ready if r[2] == "wifi"]
-            if primary.get("serial"):
-                for adb_id, _, _ in wifi:
-                    try:
-                        if _prop(adb_id, "ro.serialno") == primary["serial"]:
-                            return adb_id
-                    except RuntimeError:
-                        pass
-            return wifi[0][0] if wifi else None
-
-        ready = [r for r in _attached() if r[1] == "device"]
-        chosen = pick(ready)
-        if chosen is None:
-            wanted = [primary.get("serial")] + sorted(known - {primary.get("serial")})
-            services = _mdns()
-            services.sort(key=lambda s: (wanted.index(s["serial"])
-                                         if s["serial"] in wanted else len(wanted)))
-            for s in services:
-                out = _run("connect", s["addr"], timeout=15, check=False)
-                if "connected" in out and "cannot" not in out:
-                    break
-            ready = [r for r in _attached() if r[1] == "device"]
-            chosen = pick(ready)
-        if chosen is not None:
+        def finish(chosen):
             os.environ["ANDROID_SERIAL"] = chosen
             self._resolved = True
             try:
@@ -271,7 +268,48 @@ class Android(Backend):
                           host=chosen.rpartition(":")[0] if ":" in chosen else None)
             except RuntimeError:
                 pass
-        return chosen
+            return chosen
+
+        if primary_name:
+            serial = primary.get("serial")
+            chosen = _ready_id_for_serial(serial) if serial else None
+            if chosen is None and serial:
+                for service in _mdns():
+                    if service.get("serial") != serial:
+                        continue
+                    out = _run("connect", service["addr"], timeout=15, check=False)
+                    if "connected" in out and "cannot" not in out:
+                        break
+                chosen = _ready_id_for_serial(serial)
+            if chosen is None:
+                raise PrimaryUnreachable(
+                    f"The primary Android phone {primary_name!r} is unreachable. "
+                    "This did not connect to another phone.")
+            return finish(chosen)
+
+        def pick(ready):
+            usb = [r for r in ready if r[2] == "usb"]
+            if usb:
+                return usb[0][0]
+            wifi = [r for r in ready if r[2] == "wifi"]
+            return wifi[0][0] if wifi else None
+
+        ready = [r for r in _attached() if r[1] == "device"]
+        chosen = pick(ready)
+        if chosen is None:
+            wanted = sorted(s for s in known if s)
+            services = _mdns()
+            services.sort(key=lambda s: (wanted.index(s["serial"])
+                                         if s["serial"] in wanted else len(wanted)))
+            for service in services:
+                out = _run("connect", service["addr"], timeout=15, check=False)
+                if "connected" in out and "cannot" not in out:
+                    break
+            ready = [r for r in _attached() if r[1] == "device"]
+            chosen = pick(ready)
+        if chosen is not None:
+            return finish(chosen)
+        return None
 
     # --- awake and unlocked? -----------------------------------------------
 
@@ -545,6 +583,7 @@ class Android(Backend):
 
     def _session_state(self):
         """'ready' | 'locked' | 'unauthorized' | 'offline' | 'no-device' | 'no-adb'."""
+        from .cloud import CloudPhoneError
         try:
             if self._resolve() is not None:
                 try:
@@ -555,6 +594,8 @@ class Android(Backend):
                     raise
                 return "ready"
             states = [st for _, st, _ in _attached()]
+        except (PrimaryUnreachable, CloudPhoneError):
+            raise
         except (RuntimeError, FileNotFoundError):
             return "no-adb"
         if "unauthorized" in states:

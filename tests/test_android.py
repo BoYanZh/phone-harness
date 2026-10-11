@@ -1,4 +1,5 @@
 """Android backend behaviour that needs no phone: the commands it would send."""
+import os
 import sys
 import unittest
 import unittest.mock
@@ -134,6 +135,123 @@ class Launch(unittest.TestCase):
                 got, last = self.launched(name)
                 self.assertEqual(got, pkg)
                 self.assertEqual(last, f"am start -W -n {pkg}/.Main")
+
+
+class ResolvePrimary(unittest.TestCase):
+    """A saved primary that is gone is a failure. Another paired phone is not a substitute."""
+
+    def setUp(self):
+        self._saved = os.environ.pop("ANDROID_SERIAL", None)
+
+    def tearDown(self):
+        os.environ.pop("ANDROID_SERIAL", None)
+        if self._saved is not None:
+            os.environ["ANDROID_SERIAL"] = self._saved
+
+    def phone(self):
+        phone = Android.__new__(Android)
+        phone._resolved = False
+        return phone
+
+    def test_an_unreachable_primary_does_not_connect_another_phone(self):
+        phone = self.phone()
+        cfg = {"primary": "pixel", "phones": {"pixel": {"serial": "PRIMARY"}}}
+        with unittest.mock.patch.object(android_mod, "_load", return_value=cfg), \
+             unittest.mock.patch.object(android_mod, "_attached", return_value=[
+                 ("USB1", "device", "usb"), ("10.0.0.8:5555", "device", "wifi")]), \
+             unittest.mock.patch.object(android_mod, "_prop", return_value="OTHER"), \
+             unittest.mock.patch.object(android_mod, "_mdns", return_value=[
+                 {"serial": "OTHER", "addr": "10.0.0.8:5555"}]), \
+             unittest.mock.patch.object(android_mod, "_run") as run, \
+             unittest.mock.patch.object(android_mod, "_remember"), \
+             unittest.mock.patch("phone_harness.cloud.attached", return_value=None):
+            with self.assertRaises(android_mod.PrimaryUnreachable) as cm:
+                phone._resolve()
+        self.assertIn("unreachable", str(cm.exception))
+        self.assertIn("pixel", str(cm.exception))
+        run.assert_not_called()
+        self.assertNotIn("ANDROID_SERIAL", os.environ)
+
+    def test_the_primary_is_used_when_it_is_already_up(self):
+        phone = self.phone()
+        cfg = {"primary": "pixel", "phones": {"pixel": {"serial": "PRIMARY"}}}
+
+        def prop(adb_id, name):
+            if name == "ro.serialno":
+                return "PRIMARY" if adb_id == "10.0.0.5:5555" else "OTHER"
+            return "Pixel"
+
+        with unittest.mock.patch.object(android_mod, "_load", return_value=cfg), \
+             unittest.mock.patch.object(android_mod, "_attached", return_value=[
+                 ("USB1", "device", "usb"), ("10.0.0.5:5555", "device", "wifi")]), \
+             unittest.mock.patch.object(android_mod, "_prop", side_effect=prop), \
+             unittest.mock.patch.object(android_mod, "_mdns") as mdns, \
+             unittest.mock.patch.object(android_mod, "_run") as run, \
+             unittest.mock.patch.object(android_mod, "_remember"), \
+             unittest.mock.patch("phone_harness.cloud.attached", return_value=None):
+            chosen = phone._resolve()
+        self.assertEqual(chosen, "10.0.0.5:5555")
+        mdns.assert_not_called()
+        run.assert_not_called()
+
+    def test_mdns_connects_only_the_primary(self):
+        phone = self.phone()
+        cfg = {"primary": "pixel", "phones": {"pixel": {"serial": "PRIMARY"}}}
+        ready = []
+
+        def attached():
+            return list(ready)
+
+        def run(*args, **_kw):
+            if args and args[0] == "connect":
+                ready.append((args[1], "device", "wifi"))
+                return "connected to " + args[1]
+            return ""
+
+        def prop(adb_id, name):
+            return "PRIMARY" if name == "ro.serialno" else "Pixel"
+
+        services = [
+            {"serial": "OTHER", "addr": "10.0.0.6:5555"},
+            {"serial": "PRIMARY", "addr": "10.0.0.5:5555"},
+        ]
+        with unittest.mock.patch.object(android_mod, "_load", return_value=cfg), \
+             unittest.mock.patch.object(android_mod, "_attached", side_effect=attached), \
+             unittest.mock.patch.object(android_mod, "_prop", side_effect=prop), \
+             unittest.mock.patch.object(android_mod, "_mdns", return_value=services), \
+             unittest.mock.patch.object(android_mod, "_run", side_effect=run) as run_mock, \
+             unittest.mock.patch.object(android_mod, "_remember"), \
+             unittest.mock.patch("phone_harness.cloud.attached", return_value=None):
+            chosen = phone._resolve()
+        self.assertEqual(chosen, "10.0.0.5:5555")
+        connects = [c.args[1] for c in run_mock.call_args_list if c.args and c.args[0] == "connect"]
+        self.assertEqual(connects, ["10.0.0.5:5555"])
+
+    def test_usb_is_used_when_no_primary_is_configured(self):
+        phone = self.phone()
+        cfg = {"phones": {"pixel": {"serial": "AAA"}}}
+        with unittest.mock.patch.object(android_mod, "_load", return_value=cfg), \
+             unittest.mock.patch.object(android_mod, "_attached", return_value=[
+                 ("USB1", "device", "usb")]), \
+             unittest.mock.patch.object(android_mod, "_prop", return_value="AAA"), \
+             unittest.mock.patch.object(android_mod, "_mdns") as mdns, \
+             unittest.mock.patch.object(android_mod, "_run") as run, \
+             unittest.mock.patch.object(android_mod, "_remember"), \
+             unittest.mock.patch("phone_harness.cloud.attached", return_value=None):
+            chosen = phone._resolve()
+        self.assertEqual(chosen, "USB1")
+        mdns.assert_not_called()
+        run.assert_not_called()
+
+    def test_session_state_does_not_hide_an_unreachable_primary(self):
+        phone = self.phone()
+        phone._resolve = unittest.mock.Mock(
+            side_effect=android_mod.PrimaryUnreachable(
+                "The primary Android phone 'pixel' is unreachable"))
+        with self.assertRaises(android_mod.PrimaryUnreachable) as cm:
+            phone._session_state()
+        self.assertIn("unreachable", str(cm.exception))
+        self.assertNotIn("no-adb", str(cm.exception))
 
 
 if __name__ == "__main__":
