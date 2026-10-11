@@ -20,6 +20,7 @@ Commands:
   phone-harness android ... pair/connect/choose an Android phone
   phone-harness cloud ...   rent a catalog phone: `cloud login`, `cloud ls`, `cloud start [PHONE]`
   phone-harness config ...  settings: `config set platform android`
+  phone-harness workspace update   add missing default files; report local edits
 
 --session SID (or PHONE_HARNESS_SESSION) selects one rented phone. With neither,
 a script follows the attached session.
@@ -129,7 +130,7 @@ def _telemetry_command(args):
         return "help"
     if first in {"--doctor", "doctor"}:
         return "doctor"
-    if first in {"android", "cloud", "config", "skill"}:
+    if first in {"android", "cloud", "config", "skill", "workspace"}:
         return first
     return "usage"
 
@@ -279,6 +280,9 @@ def _run(args):
         sys.exit(cli(args[1:]))
     if args and args[0] == "config":
         from .config import cli
+        sys.exit(cli(args[1:]))
+    if args and args[0] == "workspace":
+        from .workspace import cli
         sys.exit(cli(args[1:]))
     if args and args[0] == "skill":
         _write_utf8(_skill_text())

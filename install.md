@@ -25,8 +25,12 @@ phone-harness skill > "${CODEX_HOME:-$HOME/.codex}/skills/phone-harness/SKILL.md
 - Python 3.10+, any OS. **iPhone Mirroring needs a Mac.** A cloud iPhone
   (`cloud start` of the iOS catalog entry) is driven over HTTPS from any OS.
   **Android works on macOS, Linux and Windows** and is the default off a Mac.
-  Only the CLI? `pip install phone-harness` works too; the
-  checkout is what makes the harness editable (`agent-workspace/agent_helpers.py`).
+  Only the CLI? `pip install phone-harness` works too. The first run copies
+  the packaged defaults into the agent workspace when that directory does
+  not exist (`agent-workspace/` in a checkout, or `PH_AGENT_WORKSPACE`).
+  An existing workspace is left untouched, including a custom
+  `agent_helpers.py`. `phone-harness workspace update` copies default files
+  that are missing and prints which files differ, without changing them.
 - The default phone is `phone-harness config set platform ios|android`;
   `phone-harness config` shows every setting and where it came from;
   `PHONE_HARNESS_PLATFORM=android phone-harness …` overrides for one call.

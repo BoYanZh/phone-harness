@@ -67,7 +67,11 @@ PY
      faster than a call per turn. Keep one cheap check at the end.
   4. When a check fails, isolate: re-run that one action, look at the screen,
      form one guess, test it. Do not re-run the batch hoping it lands.
-  5. Keep what you learn in `agent-workspace/agent_helpers.py`.
+  5. Keep what you learn in `agent-workspace/agent_helpers.py`
+     (`PH_AGENT_WORKSPACE` overrides that path). A pip or uv install copies
+     the defaults into that directory only when it is missing. An existing
+     workspace is never overwritten. `phone-harness workspace update` adds
+     default files you do not have yet and names files that differ.
 - **The harness reports, you decide.** Helpers return observations, never a
   verdict on your intent. Diff two `ocr()` sets, watch one label, count rows,
   poll until something appears - whatever matches what you asked for.
@@ -394,5 +398,9 @@ events into it for hands. All coordinates are global macOS screen points.
   path, and where they land is its own question per event type. Check what
   actually happened on screen rather than assuming the event arrived.
 
-For task-specific edits, use `agent-workspace/agent_helpers.py`. For setup or
+For task-specific edits, use `agent-workspace/agent_helpers.py` (or
+`PH_AGENT_WORKSPACE`). Installs seed that directory from the packaged
+defaults when it does not exist yet; an existing workspace is left as it
+is. `phone-harness workspace update` adds default files that are missing
+and reports files that differ, without changing them. For setup or
 permission problems, read `install.md`.

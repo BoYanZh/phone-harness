@@ -2,6 +2,8 @@
 
 Core helpers live here. Agent-editable helpers live in
 PH_AGENT_WORKSPACE/agent_helpers.py (defaults to <repo>/agent-workspace).
+That directory is created from the packaged defaults when it is missing;
+an existing one is left alone.
 
 Everything below is a thin wrapper over send(), which is defined first on
 purpose: the helpers are conveniences, not a wall. Drop to send() for anything
@@ -13,16 +15,16 @@ live inside one backend each, behind the ops documented in transport.py, so
 `nav.home` and `screen.text` mean the same thing everywhere even though an
 iPhone answers them with a Cmd+1 keystroke and Vision OCR.
 """
-import hashlib, importlib.util, os, time
+import hashlib, importlib.util, time
 from pathlib import Path
 
 from . import transport
 from .transport import Unsupported          # re-exported for agent scripts
+from .workspace import agent_workspace, repo_root
 
 CORE_DIR = Path(__file__).resolve().parent
-REPO_ROOT = CORE_DIR.parent.parent
-AGENT_WORKSPACE = Path(
-    os.environ.get("PH_AGENT_WORKSPACE", REPO_ROOT / "agent-workspace"))
+REPO_ROOT = repo_root()
+AGENT_WORKSPACE = agent_workspace()
 
 # The default device. connect() returns a fresh backend, so a script needing
 # two phones at once can hold them side by side instead of being limited to
