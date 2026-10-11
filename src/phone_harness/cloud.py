@@ -18,6 +18,7 @@ is no one to click Approve.
 
 Stdlib only. API reference: https://phone-harness.com/docs
 """
+import argparse
 import json
 import math
 import os
@@ -31,6 +32,7 @@ import uuid
 import webbrowser
 
 from . import config
+from . import term
 
 SAVE_WAIT = 90        # seconds to let a stopped profile phone finish closing and saving
 READY_WAIT = 240      # seconds to wait for `ready` before giving the phone back
@@ -532,8 +534,10 @@ def ensure_connected(sess, quiet=False):
                                f"{sess.get('sid', 'SID')}` to fetch the current one")
     left = (sess.get("expires_at") or 0) - time.time()
     if not quiet and 0 < left < LOW_TIME:
-        print(f"phone-harness: the cloud phone expires in {int(left)}s — run "
-              "`phone-harness cloud stop` now to keep its running state", file=sys.stderr)
+        print(term.note(
+            f"phone-harness: the cloud phone expires in {int(left)}s — run "
+            "`phone-harness cloud stop` now to keep its running state",
+            sys.stderr), file=sys.stderr)
     return serial
 
 
@@ -769,7 +773,7 @@ def _wait_ready(sid):
         if prog.get("queue_position"):
             line += f", position {prog['queue_position']} in the queue"
         if line != shown:
-            print(f"  … {line}")
+            print(term.note(f"  … {line}"))
             shown = line
         time.sleep(2)
 
@@ -788,13 +792,13 @@ def _login(args):
                  f"{start.get('error_description') or start.get('error') or start.get('title') or status}")
     print(f"To sign in, open:  {start['verification_uri']}\n"
           f"and enter code:    {start['user_code']}\n\n"
-          f"{_waitlist_line()}\n")
+          f"{term.note(_waitlist_line())}\n")
     if open_browser:
         try:
             webbrowser.open(start.get("verification_uri_complete") or start["verification_uri"])
         except Exception:
             pass
-    print("Waiting for you to approve in the browser…", flush=True)
+    print(term.note("Waiting for you to approve in the browser…"), flush=True)
     interval = int(start.get("interval", 5))
     deadline = time.monotonic() + int(start.get("expires_in") or 600)
     tok = None
@@ -822,7 +826,7 @@ def _login(args):
     state = _load_state()
     state["profile_id"] = (me.get("profile") or {}).get("id")
     _save_state(state)
-    print(f"✓ Signed in as {me.get('email') or me.get('uid')}")
+    print(f"{term.mark()} Signed in as {me.get('email') or me.get('uid')}")
     _print_account(me)
     print("\nStart your phone with: phone-harness cloud start")
     return 0
@@ -1025,7 +1029,7 @@ def _wait_out_save(profile_id):
             sys.exit("Your phone is still shutting down from its last session. "
                      "Try again in a few seconds.")
         if not told:
-            print("Your phone is still saving from its last session…")
+            print(term.note("Your phone is still saving from its last session…"))
             told = True
         time.sleep(3)
 
@@ -1122,7 +1126,7 @@ def _start(args):
     reused = _reusable(selector)
     if reused:
         live, rec = reused
-        print(f"Already attached to session {live['id']}; reusing it.")
+        print(term.note(f"Already attached to session {live['id']}; reusing it."))
         return _report(_wait_ready(live["id"]), selector=selector,
                        label=rec.get("label"), watch=False)
 
@@ -1143,7 +1147,8 @@ def _start(args):
         except CloudError:
             still = None
         if still and still.get("state") in ("provisioning", "ready"):
-            print(f"Session {previous['sid']} stays up. `--session {previous['sid']}` targets it.")
+            print(term.note(
+                f"Session {previous['sid']} stays up. `--session {previous['sid']}` targets it."))
 
     body = _create_body(entry, timeout)
     label = (entry or {}).get("label")
@@ -1175,7 +1180,8 @@ def _report(session, profile_id=None, watch=True, selector=None, label=None):
     note = {"exact": " Resumed exactly where you left it.",
             "rebooted": " Rebooted from saved storage: apps and logins kept, the screen is not."}
     words = _kind_of_phone({**session, "link": attached_now["link"]}, label or attached_now.get("label"))
-    print(f"✓ ready.{note.get(how, '')}")
+    ready_note = note.get(how, "")
+    print(f"{term.mark()} ready.{term.note(ready_note) if ready_note else ''}")
     print(f"  session  {session['id']}  ({words})")
     link = attached_now["link"]["kind"]
     print(f"  {link:<8} {_describe_link(attached_now)}" + (" (connected, unlocked)" if link == "adb" else ""))
@@ -1216,7 +1222,7 @@ def _stop(args):
             before = _api("GET", f"/sessions/{sid}")
             held_profile = held_profile or _keeps_state(before)
             _api("DELETE", f"/sessions/{sid}")
-            print(f"✓ Session {sid} ended; billing stopped.")
+            print(f"{term.mark()} Session {sid} ended; billing stopped.")
         except CloudError as e:
             if e.status != 404:
                 raise
@@ -1228,9 +1234,9 @@ def _stop(args):
     # half minute and needs nothing from here, so waiting on it is opt-in;
     # `cloud start` waits out a save that is still going.
     if not watch_save:
-        print("  Your phone is being saved (about 30s); `phone-harness cloud phone` shows when.")
+        print(term.note("  Your phone is being saved (about 30s); `phone-harness cloud phone` shows when."))
         return 0
-    print("  Saving your phone…", end="", flush=True)
+    print(term.note("  Saving your phone…"), end="", flush=True)
     deadline = time.monotonic() + SAVE_WAIT
     state = "saving"
     while time.monotonic() < deadline:
@@ -1246,8 +1252,8 @@ def _stop(args):
 
 def _status(args):
     if not _bearer(required=False):
-        print("Not signed in. Run: phone-harness cloud login")
-        print(_waitlist_line())
+        print(term.err("Not signed in. Run: phone-harness cloud login", sys.stdout))
+        print(term.note(_waitlist_line()))
         return 1
     me = _api("GET", "/me")
     if os.environ.get("PHONE_HARNESS_CLOUD_API"):
@@ -1258,7 +1264,7 @@ def _status(args):
     try:
         sess = attached()
     except CloudPhoneError as e:
-        print(e)
+        print(term.err(str(e), sys.stdout))
         return 1
     live = None
     if sess:
@@ -1275,7 +1281,7 @@ def _status(args):
     if not sess:
         lost_rec = lost()
         if lost_rec:
-            print(ended_message(lost_rec))
+            print(term.err(ended_message(lost_rec), sys.stdout))
             return 1
         running = me.get("active_session_count") or 0
         print("session     none attached" + (f" ({running} running: `phone-harness cloud ls`)"
@@ -1283,7 +1289,7 @@ def _status(args):
         return 0
     if live is None:
         cause = "expired" if _expired(sess) else "unreachable"
-        print(ended_message(_ended_record(sess, cause)))
+        print(term.err(ended_message(_ended_record(sess, cause)), sys.stdout))
         _detach(gone=True)
         return 1
     state = ("closing — saving the phone"
@@ -1440,6 +1446,40 @@ def _ls_rows(me, sessions):
     return rows
 
 
+def _format_ls(rows):
+    """Text table for `cloud ls`. Widths follow the header and the cells.
+
+    A long catalog id stays inside ID; the next column starts after it.
+    The last column is not padded, and trailing space is stripped, matching
+    the previous line shape when every value is short.
+    """
+    header = ["", "LABEL", "PLATFORM", "ID", "STATE", "NOTE", "SESSION", "LEFT"]
+    body = []
+    for row in rows:
+        sess = row.get("session") or {}
+        body.append([
+            "*" if row.get("targeted") else "",
+            str(row.get("label") or ""),
+            str(row.get("platform") or ""),
+            str(row.get("id") or "-"),
+            str(row.get("state") or "-"),
+            "temporary" if row.get("temporary") else "",
+            str(sess.get("id") or "-"),
+            str(sess.get("left") or ""),
+        ])
+    if not body:
+        return ""
+    widths = [max(len(header[i]), *(len(cells[i]) for cells in body)) for i in range(len(header))]
+    widths[0] = max(widths[0], 1)
+
+    def render(cells):
+        padded = [cells[i].ljust(widths[i]) for i in range(len(cells) - 1)]
+        padded.append(cells[-1])
+        return " ".join(padded).rstrip()
+
+    return "\n".join([render(header), *(render(cells) for cells in body)])
+
+
 def _ls(args):
     as_json = _flag(args, "--json")
     if args:
@@ -1453,15 +1493,7 @@ def _ls(args):
     if not rows:
         print("No phones in this account's catalog.")
         return 0
-    print(f"{'':1} {'LABEL':<18} {'PLATFORM':<8} {'ID':<14} {'STATE':<12} {'NOTE':<10} "
-          f"{'SESSION':<14} LEFT")
-    for row in rows:
-        sess = row.get("session") or {}
-        note = "temporary" if row.get("temporary") else ""
-        print(f"{'*' if row.get('targeted') else ' '} {row.get('label') or '':<18} "
-              f"{row.get('platform') or '':<8} {row.get('id') or '-':<14} "
-              f"{row.get('state') or '-':<12} {note:<10} "
-              f"{sess.get('id') or '-':<14} {sess.get('left') or ''}".rstrip())
+    print(_format_ls(rows))
     return 0
 
 
@@ -1489,8 +1521,8 @@ def _use(args):
         sys.exit("Usage: phone-harness cloud use SID")
     session = _wait_ready(_resolve_sid(args[0]))
     sess = _attach(session)
-    print(f"✓ attached to {session['id']}; {_describe_link(sess)}")
-    print("Helpers with no --session and no PHONE_HARNESS_SESSION follow this one.")
+    print(f"{term.mark()} attached to {session['id']}; {_describe_link(sess)}")
+    print(term.note("Helpers with no --session and no PHONE_HARNESS_SESSION follow this one."))
     return 0
 
 
@@ -1548,7 +1580,7 @@ def _keys(args):
     if args[:1] == ["create"]:
         minted = _api("POST", "/me/keys", {"label": " ".join(args[1:]) or None})
         print(minted["key"])
-        print("Shown once; store it now.", file=sys.stderr)
+        print(term.note("Shown once; store it now.", sys.stderr), file=sys.stderr)
         return 0
     if args[:1] == ["revoke"] and len(args) == 2:
         keys = [k for k in _api("GET", "/me/keys") if k["key_hash"].startswith(args[1])]
@@ -1634,20 +1666,140 @@ _COMMANDS = {"login": _login, "logout": _logout, "whoami": _whoami, "start": _st
              "phone": _phone, "keys": _keys, "history": _history}
 
 
+def _cloud_parsers():
+    """One argparse parser per subcommand, for --help and unknown flags.
+
+    The command functions still read the original words. This layer only
+    rejects a flag they do not have, and prints help for `-h` / `--help`.
+    """
+    also = "Also accepts --session SID, or PHONE_HARNESS_SESSION, to pin one phone."
+
+    def make(name, usage, description):
+        return term.Parser(
+            prog=f"phone-harness cloud {name}",
+            usage=usage,
+            description=description + "\n\n" + also,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+
+    parsers = {}
+    login = make("login", "phone-harness cloud login [--no-browser]",
+                 "Sign in through the browser.")
+    login.add_argument("--no-browser", action="store_true",
+                       help="print the link and code without opening a browser")
+    parsers["login"] = login
+
+    parsers["logout"] = make("logout", "phone-harness cloud logout",
+                             "Sign out on this machine.")
+
+    whoami = make("whoami", "phone-harness cloud whoami [--json]",
+                  "Show the signed-in account.")
+    whoami.add_argument("--json", action="store_true", help="print the account record as JSON")
+    parsers["whoami"] = whoami
+
+    start = make(
+        "start",
+        "phone-harness cloud start [PHONE] [--for DURATION] [--minutes N] [--no-watch]",
+        "PHONE is a catalog id or label, or ios/android when only one entry has that "
+        "platform. With no PHONE, start cloud.phone if it is set, otherwise a temporary "
+        "Android. --for is 90s, 15m, or a number of minutes (default 15, cap "
+        "cloud.max_minutes). --minutes N is the same length. Opens the live view.")
+    start.add_argument("--for", metavar="DURATION",
+                       help="how long to keep the phone (90s, 15m, or minutes)")
+    start.add_argument("--minutes", "-m", metavar="N",
+                       help="length in minutes; same as --for")
+    start.add_argument("--no-watch", action="store_true", help="do not open the live view")
+    # Accepted so the command can print the removal message itself.
+    for flag in ("--iphone", "--device", "--temp", "--timeout"):
+        start.add_argument(flag, action="store_true", help=argparse.SUPPRESS)
+    parsers["start"] = start
+
+    stop = make("stop", "phone-harness cloud stop [SID] [--all] [--wait]",
+                "End a session. An adb phone with a saved profile is saved; a control "
+                "link keeps its own data. --wait watches an Android save finish.")
+    stop.add_argument("--all", action="store_true", help="end every running session")
+    stop.add_argument("--wait", action="store_true", help="wait until an Android save finishes")
+    parsers["stop"] = stop
+
+    ls = make("ls", "phone-harness cloud ls [--json]",
+              "The account catalog, with a live session inlined on its phone. "
+              "* marks the session this process targets.")
+    ls.add_argument("--json", action="store_true", help="print the rows as JSON")
+    parsers["ls"] = ls
+
+    show = make("show", "phone-harness cloud show [SID] [--json]", "One session in full.")
+    show.add_argument("--json", action="store_true", help="print the session as JSON")
+    parsers["show"] = show
+
+    parsers["use"] = make("use", "phone-harness cloud use SID",
+                          "Point the terminal fallback at a running session. "
+                          "SID may be a unique prefix.")
+
+    watch = make("watch", "phone-harness cloud watch [SID] [--print]",
+                 "The read-only live view. It needs no sign-in, and the link is shareable.")
+    watch.add_argument("--print", action="store_true", help="print the link instead of opening it")
+    parsers["watch"] = watch
+
+    open_ = make("open", "phone-harness cloud open [SID] [--print]",
+                 "The dashboard, where you control the phone yourself.")
+    open_.add_argument("--print", action="store_true", help="print the link instead of opening it")
+    parsers["open"] = open_
+
+    phone = make("phone", "phone-harness cloud phone [reset --yes] [--json]",
+                 "The saved Android phone. reset --yes wipes its stored state. "
+                 "The CLI has no iPhone reset.")
+    phone.add_argument("--json", action="store_true", help="print the profile as JSON")
+    phone.add_argument("--yes", action="store_true", help="confirm phone reset")
+    parsers["phone"] = phone
+
+    keys = make("keys", "phone-harness cloud keys [create [LABEL] | revoke HASH] [--json]",
+                "API keys, for CI. create mints a key and prints it once. "
+                "revoke takes a key hash or a unique prefix of one.")
+    keys.add_argument("--json", action="store_true", help="print the keys as JSON")
+    parsers["keys"] = keys
+
+    history = make("history", "phone-harness cloud history [-n NUM] [--json]",
+                   "Finished sessions.")
+    history.add_argument("-n", "--limit", metavar="NUM",
+                         help="how many sessions to show (default 20)")
+    history.add_argument("--json", action="store_true", help="print the sessions as JSON")
+    parsers["history"] = history
+    return parsers
+
+
 def cli(args):
     args = list(args)
+    try:
+        return _dispatch(args)
+    except SystemExit as e:
+        # Command errors raise SystemExit(message), which the interpreter would
+        # print and turn into exit code 1. Print it here so a terminal can
+        # color it, and so the process exit code stays 1.
+        if isinstance(e.code, str):
+            print(term.err(e.code), file=sys.stderr)
+            return 1
+        raise
+
+
+def _dispatch(args):
     pinned = _option(args, "--session")
     if pinned:
         os.environ["PHONE_HARNESS_SESSION"] = pinned
-    fn = _status if not args else _COMMANDS.get(args[0])
+    if not args:
+        return _status(args)
+    if args[0] in ("-h", "--help"):
+        print(CLI_USAGE)
+        return 0
+    fn = _COMMANDS.get(args[0])
     if fn is None:
         print(CLI_USAGE)
         return 2
+    term.reject_unknown_flags(_cloud_parsers()[args[0]], args[1:])
     try:
         return fn(args[1:])
     except CloudError as e:
-        print(_explain(e), file=sys.stderr)
+        print(term.err(_explain(e)), file=sys.stderr)
         return 1
     except OSError as e:
-        print(f"Could not reach {_target('API')}: {e}", file=sys.stderr)
+        print(term.err(f"Could not reach {_target('API')}: {e}"), file=sys.stderr)
         return 1

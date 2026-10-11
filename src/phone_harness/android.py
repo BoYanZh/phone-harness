@@ -27,6 +27,7 @@ still "pixel-8". The first phone paired over Wi-Fi becomes the primary;
 `phone-harness android use NAME` changes that; ANDROID_SERIAL overrides
 everything.
 """
+import argparse
 import importlib.util
 import os
 import re
@@ -41,6 +42,7 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
 from . import config
+from . import term
 from .transport import Backend, Unsupported
 
 # Apple's Vision OCR ships with the iPhone backend; on a Mac it can read an
@@ -781,8 +783,8 @@ def _awake(mirror=True):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         print("mirror: scrcpy window open (close it to end)", flush=True)
     elif mirror:
-        print("mirror: scrcpy not installed (brew install scrcpy) — keeping "
-              "awake without a window", flush=True)
+        print(term.note("mirror: scrcpy not installed (brew install scrcpy) — keeping "
+                        "awake without a window"), flush=True)
 
     def stop(*_):
         if proc and proc.poll() is None:
@@ -806,7 +808,7 @@ def _awake(mirror=True):
                 awake, locked = phone._screen_status()
             if locked:
                 if was_locked is not True:
-                    print("locked — unlock the phone to continue (pokes paused)",
+                    print(term.note("locked — unlock the phone to continue (pokes paused)"),
                           flush=True)
                 was_locked = True
             else:
@@ -850,8 +852,73 @@ def _connect_serial(serial, timeout=10):
     return None
 
 
+def _android_parsers():
+    """One argparse parser per subcommand, for --help and unknown flags.
+
+    The command body still reads the original words. `--fg` is how
+    `awake --bg` re-enters this process; it is accepted and not shown.
+    """
+    def make(name, usage, description):
+        return term.Parser(
+            prog=f"phone-harness android {name}",
+            usage=usage,
+            description=description,
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+
+    parsers = {}
+    awake = make("awake", "phone-harness android awake [--bg] [--no-mirror]",
+                 "Keep the phone awake for a session, and mirror it when scrcpy "
+                 "is installed. Changes no phone settings. Ends with rest, Ctrl-C, "
+                 "or closing the mirror.")
+    awake.add_argument("--bg", action="store_true", help="detach and keep running")
+    awake.add_argument("--no-mirror", action="store_true", help="do not open a scrcpy window")
+    awake.add_argument("--fg", action="store_true", help=argparse.SUPPRESS)
+    parsers["awake"] = awake
+
+    parsers["rest"] = make("rest", "phone-harness android rest",
+                           "End the awake session and let the phone sleep.")
+
+    parsers["pair"] = make(
+        "pair",
+        "phone-harness android pair [CODE] [NAME] | phone-harness android pair IP:PORT CODE [NAME]",
+        "Wireless debugging. With a 6-digit code, the phone is found over mDNS. "
+        "Pass IP:PORT when mDNS is blocked; both values are on the pairing dialog.")
+
+    parsers["connect"] = make(
+        "connect", "phone-harness android connect [NAME|IP:PORT]",
+        "Connect a paired phone. With no name, connect the primary over mDNS.")
+
+    parsers["use"] = make("use", "phone-harness android use NAME",
+                          "Make NAME the primary phone.")
+
+    parsers["forget"] = make("forget", "phone-harness android forget NAME",
+                             "Forget a paired phone.")
+    return parsers
+
+
 def cli(args):
+    try:
+        return _cli(list(args))
+    except SystemExit as e:
+        if isinstance(e.code, str):
+            print(term.err(e.code), file=sys.stderr)
+            return 1
+        raise
+
+
+def _cli(args):
+    if args[:1] in (["-h"], ["--help"]):
+        print(CLI_USAGE)
+        return 0
     cmd = args[0] if args else None
+    if cmd is not None:
+        parser = _android_parsers().get(cmd)
+        if parser is None:
+            _load()
+            print(CLI_USAGE)
+            return 2
+        term.reject_unknown_flags(parser, args[1:])
     cfg = _load()
     phones = cfg.get("phones") or {}
 
@@ -886,8 +953,11 @@ def cli(args):
             _pidfile().parent.mkdir(parents=True, exist_ok=True)
             _pidfile().write_text(str(child.pid))
             time.sleep(2)
-            print(f"awake in background (pid {child.pid}); phone-harness android rest to end"
-                  if child.poll() is None else "awake exited at once — is a phone connected? try without --bg")
+            if child.poll() is None:
+                print(f"awake in background (pid {child.pid}); phone-harness android rest to end")
+            else:
+                print(term.err("awake exited at once — is a phone connected? try without --bg",
+                               sys.stdout))
             return 0 if child.poll() is None else 1
         _pidfile().parent.mkdir(parents=True, exist_ok=True)
         _pidfile().write_text(str(os.getpid()))
@@ -910,7 +980,7 @@ def cli(args):
                 phone._sh("input keyevent KEYCODE_SLEEP", timeout=10)
                 print("phone put to sleep")
         except RuntimeError as e:
-            print(f"(could not put the phone to sleep: {e})")
+            print(term.err(f"(could not put the phone to sleep: {e})", sys.stdout))
         return 0
 
     if cmd == "pair":
@@ -930,7 +1000,7 @@ def cli(args):
                     code = input("6-digit pairing code shown on the phone: ").strip()
                 except EOFError:
                     print(CLI_USAGE); return 2
-            print("looking for the phone on this Wi-Fi...", flush=True)
+            print(term.note("looking for the phone on this Wi-Fi..."), flush=True)
             addr = None
             for _ in range(45):                       # the dialog advertises itself
                 hits = _mdns("pairing")
@@ -938,14 +1008,16 @@ def cli(args):
                     addr = hits[0]["addr"]; break
                 time.sleep(1)
             if addr is None:
-                print("no phone is offering to pair on this network. Is Wireless "
-                      "debugging on, the pairing dialog open, and the phone on the "
-                      "same Wi-Fi as this Mac? If your network blocks mDNS, use: "
-                      "phone-harness android pair IP:PORT CODE (both shown in the dialog)")
+                print(term.err("no phone is offering to pair on this network. Is Wireless "
+                               "debugging on, the pairing dialog open, and the phone on the "
+                               "same Wi-Fi as this Mac? If your network blocks mDNS, use: "
+                               "phone-harness android pair IP:PORT CODE (both shown in the dialog)",
+                               sys.stdout))
                 return 1
         out = _run("pair", addr, code, timeout=30, check=False)
         if "Successfully paired" not in out:
-            print(out.strip() or "pairing failed"); return 1
+            print(term.err(out.strip() or "pairing failed", sys.stdout))
+            return 1
         host = addr.rpartition(":")[0]
         # the connect port differs from the pairing port; find it via mDNS
         adb_id = None
@@ -957,10 +1029,10 @@ def cli(args):
                     adb_id = hit["addr"]; break
             time.sleep(1)
         if adb_id is None:
-            print("paired, but could not find the phone's connect port on this "
-                  "network yet. Turn Wireless debugging off and on, then: "
-                  "phone-harness android connect IP:PORT  (the port shown on "
-                  "the Wireless debugging screen)")
+            print(term.err("paired, but could not find the phone's connect port on this "
+                           "network yet. Turn Wireless debugging off and on, then: "
+                           "phone-harness android connect IP:PORT  (the port shown on "
+                           "the Wireless debugging screen)", sys.stdout))
             return 1
         serial, model = _prop(adb_id, "ro.serialno"), _prop(adb_id, "ro.product.model")
         key = _remember(cfg, serial, model, host=host, name=name, primary=True)
@@ -968,24 +1040,31 @@ def cli(args):
         print(f"paired and connected: {model} as '{key}' ({adb_id})"
               + ("  — now the primary" if cfg.get("primary") == key else ""))
         if config.get("platform") != "android":
-            print("tip: `phone-harness config set platform android` makes Android "
-                  "the default, so nothing needs PHONE_HARNESS_PLATFORM=android")
+            print(term.note("tip: `phone-harness config set platform android` makes Android "
+                            "the default, so nothing needs PHONE_HARNESS_PLATFORM=android"))
         return 0
 
     if cmd == "connect":
         target = args[1] if len(args) > 1 else cfg.get("primary")
         if not target:
-            print("no primary phone yet — pair one first"); return 1
+            print(term.err("no primary phone yet — pair one first", sys.stdout))
+            return 1
         if ":" in target:
-            out = _run("connect", target, timeout=15, check=False); print(out.strip())
-            return 0 if "connected" in out and "cannot" not in out else 1
+            out = _run("connect", target, timeout=15, check=False)
+            text = out.strip()
+            ok = "connected" in out and "cannot" not in out
+            print(text if ok else term.err(text, sys.stdout))
+            return 0 if ok else 1
         p = phones.get(target)
         if not p:
-            print(f"unknown phone {target!r}; known: {', '.join(phones) or 'none'}"); return 1
+            print(term.err(f"unknown phone {target!r}; known: {', '.join(phones) or 'none'}",
+                           sys.stdout))
+            return 1
         adb_id = _connect_serial(p["serial"])
         if adb_id is None:
-            print(f"'{target}' isn't announcing on this Wi-Fi. Is Wireless "
-                  "debugging on, and the phone on the same network?"); return 1
+            print(term.err(f"'{target}' isn't announcing on this Wi-Fi. Is Wireless "
+                           "debugging on, and the phone on the same network?", sys.stdout))
+            return 1
         _remember(cfg, p["serial"], p.get("model"), host=adb_id.rpartition(":")[0],
                   primary=True)
         print(f"connected: {target} ({adb_id})"); return 0

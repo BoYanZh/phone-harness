@@ -1201,6 +1201,33 @@ class CloudCli(unittest.TestCase):
         help_text = self.run_cli("cloud", "nope")
         self.assertIn("wipes its stored state", help_text.stdout)
 
+    def test_minutes_alias_still_sets_the_length(self):
+        self.login()
+        r = self.run_cli("cloud", "start", "Temporary phone", "-m", "2", "--no-watch")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(FakeCloud.posts[-1]["timeout_seconds"], 120)
+
+    def test_ls_columns_fit_a_long_catalog_id(self):
+        self.login()
+        long_id = "prof-948b7471ed7575fc17236906"
+        FakeCloud.available = [
+            {"platform": "android", "kind": "emulator", "id": long_id,
+             "label": "Saved phone", "state": "stored"},
+            {"platform": "android", "kind": "emulator", "temporary": True,
+             "label": "Temporary phone"},
+        ]
+        text = self.run_cli("cloud", "ls")
+        self.assertEqual(text.returncode, 0, text.stderr)
+        self.assertNotIn("\x1b", text.stdout)
+        header, saved, temporary = [ln for ln in text.stdout.splitlines() if ln.strip()]
+        id_at = header.index("ID")
+        state_at = header.index("STATE")
+        self.assertEqual(saved.index(long_id), id_at)
+        self.assertEqual(state_at, id_at + len(long_id) + 1)
+        self.assertTrue(saved[state_at:].startswith("stored"))
+        self.assertEqual(temporary.index("android"), header.index("PLATFORM"))
+        self.assertIn("temporary", temporary[header.index("NOTE"):])
+
 
 if __name__ == "__main__":
     unittest.main()
