@@ -229,6 +229,19 @@ class SessionRequire(unittest.TestCase):
             p._session_require()
         self.assertEqual(p.mirror.pressed, [])
         self.assertIn("Connecting to", str(cm.exception))
+        self.assertGreaterEqual(self.clock[0], ios._CONNECT_WAIT,
+                                "a Connecting screen is waited out to the cap")
+
+    def test_launch_into_connecting_with_no_button_waits_then_is_ready(self):
+        # Cold start. The app is not running; once launched it connects by
+        # itself and the window says "Connecting to" with no Connect button.
+        # That used to raise in about a second. Wait, and the stream comes up.
+        p = self.phone(None, None, *([CONNECTING_PLAIN] * 6), LIVE)
+        self.assertEqual(p._session_require(), WIN)
+        self.assertEqual(p.mirror.launched, 1)
+        self.assertEqual(p.mirror.pressed, [])
+        self.assertGreater(self.clock[0], ios._ATTEMPT_SETTLE)
+        self.assertLess(self.clock[0], ios._CONNECT_WAIT)
 
     def test_login_prompt_is_never_pressed(self):
         p = self.phone(LOGIN)

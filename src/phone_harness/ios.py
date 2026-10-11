@@ -170,7 +170,10 @@ class IPhone(Backend):
         physical — an unlocked phone ("iPhone in Use", "Timed Out"), the Mac
         login prompt, a phone that is not paired — and only the user can
         clear it, so this raises quoting the window rather than pressing
-        again. Once the phone is live the window is brought to the front so
+        again. A Connecting screen is not that case: after a cold launch the
+        app connects by itself, the window says "Connecting to" and offers
+        no Connect button, and this waits that out instead of raising.
+        Once the phone is live the window is brought to the front so
         the user can watch the task. One press per call: a caller that retries after the user says
         the phone is locked gets a fresh press.
         """
@@ -186,7 +189,11 @@ class IPhone(Backend):
         pressed = None
         if state == "blocked":
             pressed = self._press_connect()
-            if pressed:
+            # Nothing to press on the Connecting screen (no button, or only
+            # Background). The app is already connecting — a cold launch does
+            # this by itself — so wait for the stream. Never raise while the
+            # window still says "Connecting to"; the cap is inside the wait.
+            if pressed or self._still_connecting():
                 state = self._wait_connected(_CONNECT_WAIT)
         if state == "ready":
             return self.mirror.find_window()
@@ -245,7 +252,10 @@ class IPhone(Backend):
         return state
 
     def _wait_connected(self, timeout):
-        """After a press: wait for the live stream, and fail fast otherwise.
+        """Wait for the live stream, and fail fast otherwise.
+
+        Used after a Connect press, and when the window is already the
+        Connecting screen so there was nothing to press.
 
         The attempt is watched through an accessibility observer on iPhone
         Mirroring, so the Connecting screen is noticed when it changes rather
