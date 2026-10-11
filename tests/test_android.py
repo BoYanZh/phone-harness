@@ -233,6 +233,7 @@ class ResolvePrimary(unittest.TestCase):
         with unittest.mock.patch.object(android_mod, "_load", return_value=cfg), \
              unittest.mock.patch.object(android_mod, "_attached", return_value=[
                  ("USB1", "device", "usb")]), \
+             unittest.mock.patch.object(android_mod, "_prop", return_value="AAA"), \
              unittest.mock.patch.object(android_mod, "_mdns") as mdns, \
              unittest.mock.patch.object(android_mod, "_run") as run, \
              unittest.mock.patch.object(android_mod, "_remember"), \
