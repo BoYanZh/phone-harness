@@ -1,5 +1,5 @@
 name: phone-harness
-version: 0.3.1rc1
+version: 0.1.0
 manifest_version: 2
 description: Drive a real phone from Hermes with one phone_exec tool (iPhone via iPhone Mirroring, Android over adb, or a cloud phone)
 author: Shawn Pana

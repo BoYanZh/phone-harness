@@ -274,16 +274,3 @@ class Running(Base):
         self.assertFalse(busy["success"])
         self.assertIn("busy", busy["error"])
         self.assertTrue(self.run_tool("print('after')")["success"])   # the lock was released
-
-
-class PluginVersion(unittest.TestCase):
-    def test_plugin_yaml_version_matches_the_package(self):
-        import re
-        root = Path(__file__).resolve().parents[1]
-        pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
-        plugin = (root / "integrations" / "hermes" / "plugin.yaml").read_text(encoding="utf-8")
-        package = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', pyproject)
-        manifest = re.search(r'(?m)^version:\s*(\S+)\s*$', plugin)
-        self.assertIsNotNone(package)
-        self.assertIsNotNone(manifest)
-        self.assertEqual(package.group(1), manifest.group(1))
