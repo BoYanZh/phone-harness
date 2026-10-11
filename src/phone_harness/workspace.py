@@ -127,6 +127,48 @@ def _copy_into(source, dest):
             target.write_bytes(child.read_bytes())
 
 
+def _copy_missing(source, dest):
+    """Copy children of ``source`` that ``dest`` does not already have.
+
+    A file that exists is left as it is, even when the default differs.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    for child in _children(source):
+        target = dest / child.name
+        if child.is_dir():
+            if target.exists() and not target.is_dir():
+                continue
+            if not target.exists():
+                target.mkdir()
+                _copy_into(child, target)
+            else:
+                _copy_missing(child, target)
+        elif child.is_file() and not target.exists():
+            target.write_bytes(child.read_bytes())
+
+
+def seed_missing_files(dest):
+    """Copy packaged defaults that ``dest`` does not already contain.
+
+    A missing directory is created from the defaults, the same way as
+    ``ensure_agent_workspace``. An existing directory keeps every file it
+    already has; only names that are absent are filled in. A destination
+    that is not a directory is left alone.
+    """
+    dest = Path(dest)
+    if not dest.exists():
+        ensure_agent_workspace(dest)
+    if dest.is_dir():
+        source = packaged_defaults()
+        if source is not None and not _same_dir(source, dest):
+            _copy_missing(source, dest)
+        return dest
+    if dest.exists():
+        return dest
+    dest.mkdir(parents=True, exist_ok=True)
+    return dest
+
+
 def ensure_agent_workspace(dest):
     """Create ``dest`` from the defaults when it is absent.
 

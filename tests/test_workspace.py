@@ -21,6 +21,7 @@ if str(SRC) not in sys.path:
 from phone_harness.workspace import (  # noqa: E402
     ensure_agent_workspace,
     resolved_agent_workspace,
+    seed_missing_files,
 )
 
 
@@ -77,6 +78,21 @@ class AgentWorkspace(unittest.TestCase):
         after = {p.name: p.read_bytes() for p in self.ws.iterdir()}
         self.assertEqual(after, before)
         self.assertNotIn(b"def tap_icon", custom.read_bytes())
+
+    def test_seed_missing_files_fills_gaps_and_keeps_existing_files(self):
+        missing = Path(self.tmp.name) / "fresh"
+        self.assertEqual(seed_missing_files(missing), missing)
+        self.assertEqual((missing / "agent_helpers.py").read_bytes(),
+                         DEFAULT_HELPERS.read_bytes())
+
+        self.ws.mkdir()
+        self.assertTrue((seed_missing_files(self.ws) / "agent_helpers.py").is_file())
+        custom = self.ws / "agent_helpers.py"
+        custom.write_text("# agent edited this\nVALUE = 'custom'\n")
+        (self.ws / "notes.txt").write_text("keep\n")
+        seed_missing_files(self.ws)
+        self.assertEqual(custom.read_text(), "# agent edited this\nVALUE = 'custom'\n")
+        self.assertEqual((self.ws / "notes.txt").read_text(), "keep\n")
 
     def test_a_partial_workspace_is_not_filled_in(self):
         self.ws.mkdir()

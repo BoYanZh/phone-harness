@@ -17,6 +17,7 @@ import ast
 import contextlib
 import importlib.util
 import json
+import logging
 import os
 import re
 import signal
@@ -25,6 +26,8 @@ import sys
 import threading
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger("phone_harness.hermes")
 
 PLUGIN = "phone-harness"
 DEFAULT_TIMEOUT_S, MIN_TIMEOUT_S, MAX_TIMEOUT_S = 300, 5, 1800
@@ -37,7 +40,8 @@ DESCRIPTION = (
     "Drive the user's real phone with phone-harness: their iPhone through the Mac's iPhone Mirroring "
     "window, an Android over adb, or a Phone Harness Cloud phone. `code` runs as Python with the phone "
     "helpers pre-imported; print() whatever you need back. Each call is a fresh interpreter (variables "
-    "do not persist); the phone keeps its state. Start with ensure_device(). Ask the user before "
+    "do not persist); the phone keeps its state. Start with ensure_device(); it covers iPhone "
+    "Mirroring, Android, and a cloud phone. Ask the user before "
     "anything outward-facing or hard to undo (sending, posting, buying, deleting, changing settings). "
     "Never type passwords, PINs or 2FA codes. Read the skill phone-harness:phone-harness for the helpers."
 )
@@ -157,6 +161,24 @@ def _workspace() -> Path:
     return _data_dir() / "agent-workspace"
 
 
+def _seed_workspace(workspace: Path) -> None:
+    """Copy the packaged agent_helpers.py in when that file is missing.
+
+    Hermes's plugin-data folder is created up front. An empty directory
+    makes phone-harness skip its first-run seed, so the workspace can end
+    up with no helpers. Existing files are never overwritten.
+    """
+    try:
+        from phone_harness.workspace import seed_missing_files
+    except ImportError as exc:
+        log.warning("phone-harness: could not seed the agent workspace: %s", exc)
+        workspace.mkdir(parents=True, exist_ok=True)
+        return
+    seed_missing_files(workspace)
+    if not workspace.is_dir():
+        workspace.mkdir(parents=True, exist_ok=True)
+
+
 def _env(workspace: Path) -> dict:
     """The script inherits Hermes's environment. Platform and telemetry stay phone-harness's own
     config: an exported PHONE_HARNESS_PLATFORM is left as it is, and this plugin does not set one."""
@@ -224,7 +246,7 @@ def phone_exec(args: dict, **kwargs) -> str:
     group: dict[str, Any] = ({"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
                              if os.name == "nt" else {"start_new_session": True})
     try:
-        workspace.mkdir(parents=True, exist_ok=True)
+        _seed_workspace(workspace)
         with _phone_lock(LOCK_WAIT_S):
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -307,5 +329,7 @@ def register(ctx) -> None:
     ctx.register_tool(name="phone_exec", toolset=PLUGIN, schema=SCHEMA, handler=phone_exec,
                       check_fn=_available, emoji="📱")
     ctx.register_hook("pre_tool_call", _on_pre_tool_call)
-    with contextlib.suppress(Exception):
+    try:
         _register_skill(ctx)
+    except Exception as exc:
+        log.warning("phone-harness: could not register the skill: %s", exc)

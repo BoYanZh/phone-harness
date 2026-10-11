@@ -364,8 +364,10 @@ class SessionRequire(unittest.TestCase):
             p.send("input.scroll", x=1, y=1, dy=-10, dx=0)
         msg = str(cm.exception)
         self.assertIn("iPhone in Use", msg)
+        self.assertIn("Try Again", msg)
         self.assertIn("LOCK your iPhone", msg)
         self.assertIn("passcode", msg)
+        self.assertIn("screenshot()", msg)
         self.assertEqual(p.mirror.pressed, [])
         self.assertNotIn("scroll", p.mirror.actions)
 
@@ -427,12 +429,18 @@ class SessionRequire(unittest.TestCase):
         self.assertNotIn("scroll", p.mirror.actions)
         self.assertEqual(p.mirror.pressed, [])
 
-    def test_screenshot_raises_when_the_phone_is_in_use(self):
+    def test_screenshot_works_when_the_window_is_blocked(self):
         p = self.phone(IN_USE)
+        path, win = p.send("screen.capture")
+        self.assertEqual(path, "/dev/null")
+        self.assertEqual(win, WIN)
+        self.assertEqual(p.mirror.actions, ["capture"])
+        self.assertEqual(p.mirror.pressed, [])
         with self.assertRaises(RuntimeError) as cm:
-            p.send("screen.capture")
+            p.send("screen.text")
         self.assertIn("iPhone in Use", str(cm.exception))
-        self.assertNotIn("capture", p.mirror.actions)
+        self.assertIn("screenshot()", str(cm.exception))
+        self.assertEqual(p.mirror.actions, ["capture"])
 
 
 if __name__ == "__main__":

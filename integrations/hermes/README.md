@@ -28,6 +28,7 @@ hermes plugins install ShawnPana/phone-harness/integrations/hermes
 
 Hermes installs the `phone-harness` package into its own environment and asks
 whether to enable the plugin. Tools load per session, so start a new chat.
+Restart the Hermes desktop app after installing or updating the plugin.
 Each script runs as `python -m phone_harness.run` on Hermes's interpreter: the
 copy Hermes installed, kept apart from a `phone-harness` command on `PATH`.
 
@@ -47,7 +48,9 @@ This plugin has no settings of its own.
 - `PHONE_HARNESS_PLATFORM`, when you have exported it, is passed through.
 - The agent workspace is one folder, `agent-workspace`, in Hermes's plugin
   data directory. If `PH_AGENT_WORKSPACE` is already set, that path is used
-  instead. Each script receives it as `PH_AGENT_WORKSPACE`.
+  instead. Each script receives it as `PH_AGENT_WORKSPACE`. If
+  `agent_helpers.py` is missing, the packaged default is copied in; a file
+  that is already there is left as it is.
 
 ## How it works
 

@@ -218,6 +218,52 @@ class Skill(unittest.TestCase):
             "description": "Drive the phone.",
         })
 
+    def test_a_failing_skill_registration_is_logged(self):
+        path = self.root / "SKILL.md"
+        path.write_text(
+            '---\nname: phone-harness\ndescription: "Drive the phone."\n---\n\n# phone-harness\n',
+            encoding="utf-8",
+        )
+        self.plugin._package_dir = lambda: self.root
+        self.plugin._command = lambda: [sys.executable, "-c", ""]
+
+        class Boom(FakeCtx):
+            def register_skill(self, name, path, description="", frontmatter=None):
+                raise RuntimeError("skill store down")
+
+        ctx = Boom()
+        with self.assertLogs("phone_harness.hermes", level="WARNING") as caught:
+            self.plugin.register(ctx)
+        self.assertIn("phone_exec", ctx.tools)
+        self.assertTrue(any("skill store down" in line for line in caught.output))
+
+
+class WorkspaceSeed(unittest.TestCase):
+    def test_an_empty_workspace_is_seeded_and_an_edit_is_kept(self):
+        src = Path(__file__).resolve().parents[1] / "src"
+        sys.path.insert(0, str(src))
+        self.addCleanup(sys.path.remove, str(src))
+        plugin = load_plugin()
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        data = Path(tmp.name)
+        plugin._data_dir = lambda: data
+        plugin._workspace = lambda: data / "agent-workspace"
+        plugin._command = lambda: [sys.executable, "-c", "import sys; exec(sys.stdin.read())"]
+        plugin._packaged_skill = lambda: None
+
+        first = json.loads(plugin.phone_exec({"code": "print('seeded')"}))
+        self.assertTrue(first["success"], first)
+        helper = data / "agent-workspace" / "agent_helpers.py"
+        self.assertTrue(helper.is_file())
+        helper.write_text("# keep\n")
+        (data / "agent-workspace" / "notes.txt").write_text("mine\n")
+
+        again = json.loads(plugin.phone_exec({"code": "print('again')"}))
+        self.assertTrue(again["success"], again)
+        self.assertEqual(helper.read_text(), "# keep\n")
+        self.assertEqual((data / "agent-workspace" / "notes.txt").read_text(), "mine\n")
+
 
 class Running(Base):
     def test_prints_come_back_as_output(self):

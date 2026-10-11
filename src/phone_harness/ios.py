@@ -27,14 +27,6 @@ import os
 from . import ocr as _vision
 from .transport import Backend
 
-# Fallback only. The primary check is structural (see _session_state), and a
-# phrase list cannot be complete: it missed "Connection Paused" and the Mac
-# login screen in English, and misses every interstitial on a non-English
-# system.
-_BLOCKED_MARKERS = ("iphone in use", "lock your iphone", "mirroring ended",
-                    "to connect", "connection paused", "connection interrupted",
-                    "is locked", "enter the mac login", "try again")
-
 
 def _load_transport():
     """background drives iPhone Mirroring without ever taking the window to the
@@ -63,9 +55,10 @@ class IPhone(Backend):
         self._note_seen = False
 
     def send(self, op, **kw):
-        """Run `op`. Actions and captures check the stream first and again
-        after, and raise if it is no longer live. They do not press Connect:
-        a takeover means the user has the phone."""
+        """Run `op`. Actions check the stream first and again after, and
+        raise if it is no longer live. They do not press Connect: a takeover
+        means the user has the phone. A screenshot is not an action: looking
+        at the window stays available while an interstitial is up."""
         watch = op in _ACTION_OPS
         if watch:
             self._raise_if_not_live()
@@ -148,34 +141,40 @@ class IPhone(Backend):
 
         'blocked' means an interstitial is up — iPhone in Use, paused, ended,
         connect, or the Mac login screen — and nothing should be tapped or
-        typed until the user clears it.
+        typed until the user clears it. screenshot() still works.
 
-        Detected structurally: the live phone image is a video stream that
-        accessibility cannot see into, so a working session exposes no UI
-        inside the window, while every interstitial is an ordinary Mac view
-        with labels and a button. That holds in any language and for screens
-        Apple has not shipped yet, where matching known phrases does neither —
-        the old list missed both "Connection Paused" and the Mac login prompt,
-        and reported 'ready' for a password field.
+        Accessibility decides, and nothing else may override a structural
+        'ready'. The live phone image is a video stream that accessibility
+        cannot see into, so a working session exposes no UI inside the
+        window, while every interstitial is an ordinary Mac view with labels
+        and a button. That holds in any language and for screens Apple has
+        not shipped yet. OCR is not used: it reads the phone's own screen
+        and cannot tell that text from a Mac interstitial.
         """
-        if self.mirror.running_app() is None:
-            return "not-running"
-        if self.mirror.find_window() is None:
-            return "no-window"
-        if self.mirror.window_ax_content():
-            return "blocked"
-        path, win = self.mirror.capture()   # window exists, launches nothing
-        texts = " ".join(o["text"] for o in _vision.recognize(path, win)).lower()
-        return "blocked" if any(m in texts for m in _BLOCKED_MARKERS) else "ready"
+        return self._structural_state()
 
     def _session_detail(self):
-        """What the interstitial says, quoted rather than guessed at.
+        """Labels and button titles accessibility can read in the window.
 
-        Button titles are not used: the same screen reported 'Connect' once and
-        an empty title a minute later.
+        Empty when the phone image is live. An empty button title is
+        skipped: the same screen has reported 'Connect' and then nothing.
         """
-        return " ".join(t for role, t in self.mirror.window_ax_content()
-                        if role == "AXStaticText" and t)
+        texts, buttons = [], []
+        for role, text in self.mirror.window_ax_content():
+            label = " ".join((text or "").split())
+            if not label:
+                continue
+            if role == "AXButton":
+                buttons.append(label)
+            elif role == "AXStaticText":
+                texts.append(label)
+        parts = []
+        if texts:
+            parts.append(" ".join(texts))
+        if buttons:
+            quoted = ", ".join(f"'{b}'" for b in buttons)
+            parts.append(f"buttons: {quoted}")
+        return " ".join(parts)
 
     def _session_require(self):
         """Bounds once the phone is connected and ready.
@@ -232,8 +231,8 @@ class IPhone(Backend):
         Two structural reads bracket each guarded action (before and after).
         Each read is one ax_session_hint(): the running app, the phone
         window, and whether that window has any accessibility children. A
-        live stream has none. There is no screen capture and no Vision OCR,
-        which is what a full session.state costs.
+        live stream has none. There is no screen capture and no Vision OCR.
+        session.state is this same read.
 
         When the observer is up, a zero-timeout run-loop turn delivers a
         notification that arrived since the last action, and that
@@ -275,7 +274,11 @@ class IPhone(Backend):
             self._session_watch_off = True
 
     def _structural_state(self):
-        """ready | blocked | no-window | not-running, without capture or OCR."""
+        """ready | blocked | no-window | not-running, without capture or OCR.
+
+        Accessibility content in the window is 'blocked'. None is 'ready'.
+        Text recognised on the phone's own screen must not change that.
+        """
         hint = getattr(self.mirror, "ax_session_hint", None)
         if hint is not None:
             return hint()
@@ -288,7 +291,7 @@ class IPhone(Backend):
         return "ready"
 
     def _raise_not_live(self, state, pressed=None):
-        """The error ensure_mirroring raises, without pressing anything."""
+        """The error ensure_device raises, without pressing anything."""
         if state == "not-running":
             raise RuntimeError(
                 "iPhone Mirroring would not launch. Please open the iPhone "
@@ -305,7 +308,7 @@ class IPhone(Backend):
             f"iPhone Mirroring is not connected. {did}: {said}. This needs "
             "you: if it mentions the iPhone being in use or timing out, LOCK "
             "your iPhone, then tell me and I will try once more. I never "
-            "type a passcode.")
+            "type a passcode. Call screenshot() to see what the window shows.")
 
     def _show(self):
         """Bring the mirroring window to the front so the user can watch.
@@ -674,11 +677,13 @@ def _ax_watch_open(mirror, on_notify):
     return _AxWatch(remove_note, remove_source, added, callback)
 
 
-# Ops that drive the phone or read its screen. Each one refuses to run
-# against a paused window. session.require is not here: that is the one
-# call allowed to press Connect, and only when the user asks to resume.
+# Ops that drive the phone or read it as phone content. Each one refuses
+# to run against a paused window. session.require is not here: that is the
+# one call allowed to press Connect, and only when the user asks to resume.
+# screen.capture is not here either. Looking at the window is read-only and
+# works while the session is blocked, as long as the window exists.
 _ACTION_OPS = frozenset({
-    "screen.capture", "screen.text", "screen.text_pixels",
+    "screen.text", "screen.text_pixels",
     "input.tap", "input.press", "input.drag", "input.scroll",
     "input.keys", "input.text",
     "nav.home", "nav.recents",

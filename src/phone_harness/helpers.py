@@ -63,8 +63,23 @@ def connection_state():
     On iPhone Mirroring: 'ready' | 'blocked' | 'no-window' | 'not-running',
     where 'blocked' means an interstitial is up and nothing should be tapped
     or typed until it is cleared — ensure_device() tries that once.
+    screenshot() and screen_info() still work while blocked if the mirroring
+    window is open.
+
+    connection_detail() is the reason, as text already in the window. It
+    does not take a screenshot.
     """
     return send("session.state")
+
+
+def connection_detail():
+    """Why connection_state() is not 'ready', without a screenshot.
+
+    On iPhone Mirroring this is the labels and button titles in the
+    mirroring window. Empty when the phone is live, because that image
+    has no such text. On Android it is the adb device list.
+    """
+    return send("session.detail")
 
 
 def ensure_device():
@@ -91,7 +106,10 @@ def find_window():
 
 
 def screen_info():
-    """{window, frontmost, img_px} — bounds, focus state, capture size."""
+    """{window, frontmost, img_px} — bounds, focus state, capture size.
+
+    On iPhone Mirroring this still works when the session is blocked, as
+    long as the mirroring window exists."""
     from . import ocr as _vision
     path, win = send("screen.capture")
     w, h = _vision.image_size(path)
@@ -101,7 +119,11 @@ def screen_info():
 
 def screenshot(path=None):
     """Capture the screen to a PNG and return its path. View it to see the
-    phone; combine with ocr() for coordinates."""
+    phone; combine with ocr() for coordinates.
+
+    On iPhone Mirroring this still works when connection_state() is not
+    'ready', as long as the mirroring window exists. Looking does not
+    press Connect."""
     p, _ = send("screen.capture", path=path)
     return p
 

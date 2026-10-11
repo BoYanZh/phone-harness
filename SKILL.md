@@ -115,7 +115,7 @@ PY
   password or a 2FA code; on a cloud phone, hand the controls over instead
   (`phone-harness cloud open`, below).
 - **The harness reconnects what it can; the rest is the user's.** On a
-  personal iPhone, start the task with `ensure_mirroring()`: it opens iPhone
+  personal iPhone, start the task with `ensure_device()`: it opens iPhone
   Mirroring if it is closed, presses the window's Connect once, and brings
   the window to the front so the user can watch. Pairing, unlocking, tapping Allow,
   locking an iPhone that says "iPhone in Use" or "Timed Out", approving a
@@ -388,7 +388,8 @@ The Mac's iPhone Mirroring app renders the phone as a window; the harness
 captures that window and OCRs it with Vision for eyes, and posts HID-level
 events into it for hands. All coordinates are global macOS screen points.
 
-- **Start every task with `ensure_mirroring()`.** It opens iPhone Mirroring
+- **Start every task with `ensure_device()`.** It is the first call on every
+  phone, including iPhone Mirroring. It opens iPhone Mirroring
   if it is not running, brings the window to the front so the user sees what
   you see, presses the interstitial's Connect once through accessibility,
   and waits for the live stream. A phone that is in use shows up within
@@ -427,18 +428,23 @@ events into it for hands. All coordinates are global macOS screen points.
   `press("tab")` moves between fields.
 - **What the harness cannot clear is physical.** Connect only works while
   the iPhone is locked; "iPhone in Use" and "Timed Out ... due to iPhone use"
-  mean it was not. `ensure_mirroring()` presses Connect once and then raises
+  mean it was not. `ensure_device()` presses Connect once and then raises
   quoting the screen (`connection_state()` is `ready` / `blocked` /
-  `no-window` / `not-running`). **STOP and relay it**, ask the user to lock
-  the phone, and retry once when they say so. The app reconnects by itself
+  `no-window` / `not-running`). `connection_detail()` returns the labels and
+  button titles in the window, with no screenshot, so you can see why it is
+  blocked. **STOP and relay it**, ask the user to lock the phone, and retry
+  once when they say so. The app reconnects by itself
   the moment the phone is locked, so the retry usually finds it live; if
   not, it presses Connect again. Do not press it yourself in a loop and do
   not tap the window (an interstitial is a Mac view; taps meant for the
   phone go nowhere). **Unlocking the physical phone pauses the session**
   ("iPhone in Use") - the same rule applies mid-task. Taps, scrolls, swipes,
-  typing, key presses, `open_app`, `home`, and `screenshot` raise that same
-  message and do not press Connect. Ask the user to lock the phone, then
-  call `ensure_mirroring()` and continue from the step that raised.
+  typing, key presses, `open_app`, and `home` raise that same
+  message and do not press Connect. `screenshot()` and `screen_info()` still
+  work while the mirroring window is open, including when the state is
+  blocked. Call `screenshot()` to see what the window shows. Ask the user
+  to lock the phone, then call `ensure_device()` and continue from the step
+  that raised.
   The Mac login prompt that
   sometimes appears in the window is never typed into.
 - **Unfocused input is swallowed silently - for events you post yourself.**
