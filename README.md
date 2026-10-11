@@ -79,10 +79,11 @@ phone-harness cloud stop             # billing stops; a saved Android is written
 `cloud ls` is the catalog (`GET /me` → `available`): each phone's label,
 platform, and id, with a live session on that row (matched by device id,
 profile id, or the temporary row). A cloud iPhone session does not echo its
-catalog id (`device` is the word "iPhone"); it is written on the one catalog
-row of that platform and kind whose `state` is `running`, when that is the
-only such row and the only leftover session of that platform. A session that
-matches nothing is its own row. `cloud start` with no name
+catalog id (`device` is the word "iPhone", and `profile` is an `iphone-…` id
+that matches no catalog row). That session is written on the one catalog row
+of the same platform and kind whose `state` is `running`, when that is the
+only such row and the only unmatched session of that platform and kind. A
+session that matches nothing is its own row. `cloud start` with no name
 starts this machine's `cloud.phone` setting if one is set, else what the
 service gives an unnamed start, a temporary Android. A name is a catalog id or label, or `ios` /
 `android` when only one entry has that platform. A [cloud Android](https://phone-harness.com/cloud)

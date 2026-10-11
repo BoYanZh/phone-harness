@@ -1019,6 +1019,42 @@ class CloudCli(unittest.TestCase):
         self.assertEqual(text.count("74f35c02595f"), 1, text)
         self.assertEqual(sum(1 for line in text.splitlines() if "iPhone" in line), 1, text)
 
+    def test_ls_inlines_the_live_iphone_profile_that_matches_no_catalog_id(self):
+        """Captured while a cloud iPhone was running.
+
+        The session's `profile` is `iphone-…`, which is not the catalog id
+        `iph-…`. It is still that one running ios device.
+        """
+        self.login()
+        FakeCloud.available = [
+            {"platform": "android", "kind": "emulator",
+             "id": "prof-948b7471ed7575fc17236906", "label": "Saved phone",
+             "state": "stored"},
+            {"platform": "android", "kind": "emulator", "temporary": True,
+             "label": "Temporary phone"},
+            {"platform": "ios", "kind": "device", "id": "iph-e2eeaed7e6",
+             "label": "iPhone", "state": "running"},
+        ]
+        FakeCloud.sessions["61712b99d488"] = {
+            "id": "61712b99d488", "state": "ready", "platform": "ios", "kind": "device",
+            "device": "iPhone", "phone": None, "profile": "iphone-99d901c34490fbe8bc4b0402",
+            "screen": {"w": 750, "h": 1334}, "expires_at": 1791693728.89,
+            "timeout_seconds": 120,
+            "control": {"url": "http://127.0.0.1:1", "token": "ct_1"}}
+        raw = self.run_cli("cloud", "ls", "--json")
+        self.assertEqual(raw.returncode, 0, raw.stderr)
+        rows = json.loads(raw.stdout)
+        self.assertEqual([row.get("unmatched") for row in rows], [None, None, None])
+        iphone = rows[2]
+        self.assertEqual(iphone["id"], "iph-e2eeaed7e6")
+        self.assertEqual(iphone["state"], "running")
+        self.assertEqual(iphone["session"]["id"], "61712b99d488")
+        text = self.run_cli("cloud", "ls").stdout
+        self.assertEqual(text.count("61712b99d488"), 1, text)
+        line = next(line for line in text.splitlines() if "61712b99d488" in line)
+        self.assertIn("iph-e2eeaed7e6", line)
+        self.assertIn("iPhone", line)
+
     def test_ls_does_not_guess_when_two_iphones_are_running(self):
         self.login()
         FakeCloud.available = [

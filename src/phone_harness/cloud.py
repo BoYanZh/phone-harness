@@ -1359,14 +1359,15 @@ def _session_on_entry(entry, session):
 
 
 def _inline_running(entries, rows, sessions, used, blob, mine):
-    """Put an id-less live session on the one catalog phone it can be.
+    """Put one unmatched live session on the one catalog phone that is running.
 
-    A cloud iPhone's session (`GET /sessions`) has `platform`, `kind`, and
-    `device` set to the display word "iPhone". It does not echo `device_id`.
-    The catalog entry (`GET /me` → `available`) sets `state` to `running`
-    while a session holds that phone. When exactly one entry of that
-    platform and kind is `running`, and exactly one still-unmatched session
-    of that platform names no device or profile id, the session is that row.
+    A cloud iPhone session does not echo the catalog id. It carries
+    `platform`, `kind`, `device` set to the word "iPhone", and a `profile`
+    like `iphone-…` that matches no catalog row. Any session whose
+    device_id or profile matched no row is unmatched, even when those fields
+    are set. When exactly one entry of that platform and kind is `running`,
+    and exactly one unmatched session has that same platform and kind, the
+    session is that row.
     """
     for entry, row in zip(entries, rows):
         if row.get("session") or entry.get("state") != "running":
@@ -1379,14 +1380,10 @@ def _inline_running(entries, rows, sessions, used, blob, mine):
                    and e.get("state") == "running"]
         if len(running) != 1:
             continue
-        candidates = []
-        for session in sessions:
-            if session.get("id") in used or session.get("platform") != platform:
-                continue
-            devices, profiles = _session_ids(session)
-            if devices or profiles:
-                continue
-            candidates.append(session)
+        candidates = [s for s in sessions
+                      if s.get("id") not in used
+                      and s.get("platform") == platform
+                      and s.get("kind") == kind]
         if len(candidates) != 1:
             continue
         match = candidates[0]
