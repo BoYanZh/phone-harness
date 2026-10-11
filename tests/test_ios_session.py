@@ -55,6 +55,10 @@ CONNECTING = [("AXStaticText", "Connecting to"),
 # was still on screen.
 CONNECTING_PLAIN = [("AXStaticText", "Connecting to"),
                     ("AXStaticText", "iPhone 17 Pro Max")]
+# Cold launch draws the phone window before any label. Accessibility sees
+# a node, so the session is blocked, but there is nothing to read and
+# nothing to press. That is not a finished interstitial.
+BLANK = [("AXImage", "")]
 IN_USE_RETRYING = [("AXStaticText", "iPhone in Use"),
                    ("AXStaticText", "Lock your iPhone to connect.")]
 LOGIN = [("AXStaticText", "Enter the Mac login password"),
@@ -270,6 +274,28 @@ class SessionRequire(unittest.TestCase):
         self.assertIn("Connecting to", str(cm.exception))
         self.assertGreaterEqual(self.clock[0], ios._CONNECT_WAIT,
                                 "a Connecting screen is waited out to the cap")
+
+    def test_launch_blank_then_connecting_then_live(self):
+        # The blank window comes first, then "Connecting to", then the stream.
+        # Raising on the blank ("an interstitial with no text") gave up
+        # while the phone was still connecting.
+        p = self.phone(None, None, BLANK, BLANK,
+                       *([CONNECTING_PLAIN] * 6), LIVE)
+        self.assertEqual(p._session_require(), WIN)
+        self.assertEqual(p.mirror.launched, 1)
+        self.assertEqual(p.mirror.pressed, [])
+        self.assertGreater(self.clock[0], ios._ATTEMPT_SETTLE)
+        self.assertLess(self.clock[0], ios._CONNECT_WAIT)
+
+    def test_launch_blank_for_the_whole_cap_raises(self):
+        p = self.phone(None, None, BLANK)
+        with self.assertRaises(RuntimeError) as cm:
+            p._session_require()
+        self.assertIn("an interstitial with no text", str(cm.exception))
+        self.assertEqual(p.mirror.launched, 1)
+        self.assertEqual(p.mirror.pressed, [])
+        self.assertGreaterEqual(self.clock[0], ios._CONNECT_WAIT)
+        self.assertLess(self.clock[0], ios._CONNECT_WAIT + 1)
 
     def test_launch_into_connecting_with_no_button_waits_then_is_ready(self):
         # Cold start. The app is not running; once launched it connects by

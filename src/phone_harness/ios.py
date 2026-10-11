@@ -186,9 +186,9 @@ class IPhone(Backend):
         physical — an unlocked phone ("iPhone in Use", "Timed Out"), the Mac
         login prompt, a phone that is not paired — and only the user can
         clear it, so this raises quoting the window rather than pressing
-        again. A Connecting screen is not that case: after a cold launch the
-        app connects by itself, the window says "Connecting to" and offers
-        no Connect button, and this waits that out instead of raising.
+        again. A Connecting screen is not that case, and neither is the blank
+        window launch draws before any label: no text and no buttons. Both
+        are waited out. A cold launch connects by itself.
         Once the phone is live the window is brought to the front so
         the user can watch the task. One press per call: a caller that retries after the user says
         the phone is locked gets a fresh press.
@@ -205,11 +205,11 @@ class IPhone(Backend):
         pressed = None
         if state == "blocked":
             pressed = self._press_connect()
-            # Nothing to press on the Connecting screen (no button, or only
-            # Background). The app is already connecting — a cold launch does
-            # this by itself — so wait for the stream. Never raise while the
-            # window still says "Connecting to"; the cap is inside the wait.
-            if pressed or self._still_connecting():
+            # Wait when the press is in flight: we pressed something, the
+            # window says "Connecting to", or it is still the blank window
+            # launch draws before any label. A finished interstitial (text
+            # or a button, and not Connecting) raises below instead.
+            if pressed or not self._finished_interstitial():
                 state = self._wait_connected(_CONNECT_WAIT)
         if state == "ready":
             return self.mirror.find_window()
@@ -360,15 +360,16 @@ class IPhone(Backend):
         to" draws, and one empty read in that gap looks live.
 
         The Connecting screen is in progress when its text contains
-        "Connecting to" or it offers a Background button. A live attempt
-        showed "Connecting to iPhone 17 Pro Max" with no button at all, and
-        treating "no Background button" as a finished failure gave up while
-        the phone was still connecting. A blocked interstitial that is not
-        that screen — "iPhone in Use", locked, timed out — is the answer once
-        the attempt has had a couple of seconds to draw, so it fails then
-        instead of sitting out the cap. The user locking the phone is what
-        fixes it, and the app reconnects by itself, so the next
-        session.require finds it live."""
+        "Connecting to" or it offers a Background button. So is a blocked
+        window with no text and no buttons: measured on a cold launch, that
+        blank is what is drawn before "Connecting to" appears, and treating
+        it as a finished interstitial raised "an interstitial with no text"
+        while the stream was still coming up. A blocked interstitial with
+        recognizable text or buttons that is not Connecting — "iPhone in
+        Use", locked, timed out — is the answer once the attempt has had a
+        couple of seconds to draw, so it fails then instead of sitting out
+        the cap. The user locking the phone is what fixes it, and the app
+        reconnects by itself, so the next session.require finds it live."""
         try:
             return self._wait_connected_events(timeout)
         except _ObserverUnavailable:
@@ -443,14 +444,34 @@ class IPhone(Backend):
 
         None means the attempt is still in progress. 'ready' only after the
         live stream has held for three looks. 'blocked' is a finished
-        interstitial once the Connecting screen has had time to appear."""
+        interstitial (recognizable text or buttons, and not Connecting)
+        once the attempt has had time to draw a label. A blank window is
+        not finished."""
         streak = streak + 1 if state == "ready" else 0
         if streak >= 3:
             return "ready", streak
         if (state == "blocked" and elapsed > _ATTEMPT_SETTLE
-                and not self._still_connecting()):
+                and self._finished_interstitial()):
             return "blocked", streak
         return None, streak
+
+    def _finished_interstitial(self):
+        """A blocked window that has something to read, and is not Connecting.
+
+        No text and no buttons is transitional: the phone window is up but
+        the Connecting label has not been drawn. That holds before a press
+        and after one. "Connecting to" or a Background button is the same
+        wait, not a failure."""
+        if self._still_connecting():
+            return False
+        return self._recognizable_ui()
+
+    def _recognizable_ui(self):
+        """True when the window shows text or a button title."""
+        content = self.mirror.window_ax_content()
+        if any(t.strip() for _role, t in content if t):
+            return True
+        return any(t.strip() for t, _el in self.mirror.window_ax_buttons() if t)
 
     def _still_connecting(self):
         """The Connecting screen, including one that has no buttons.
