@@ -1,4 +1,5 @@
 """The phone-harness CLI: exec Python from stdin with helpers pre-imported."""
+import argparse
 import functools
 import io
 import os
@@ -7,6 +8,7 @@ import time
 from pathlib import Path
 
 from . import telemetry
+from .term import Parser
 
 USAGE = """Usage:
   phone-harness <<'PY'
@@ -15,7 +17,9 @@ USAGE = """Usage:
 
 Commands:
   phone-harness --session SID <<'PY'   pin one cloud phone for this process
+  phone-harness --version, -V           print phone-harness <version>
   phone-harness --doctor [ios|android]   diagnose the phone the helpers would drive
+  phone-harness doctor [ios|android]     same diagnosis as --doctor
   phone-harness skill       print the phone-harness skill text
   phone-harness android ... pair/connect/choose an Android phone
   phone-harness cloud ...   rent a catalog phone: `cloud login`, `cloud ls`, `cloud start [PHONE]`
@@ -128,6 +132,8 @@ def _telemetry_command(args):
     first = args[0]
     if first in {"-h", "--help"}:
         return "help"
+    if first in {"-V", "--version"}:
+        return "version"
     if first in {"--doctor", "doctor"}:
         return "doctor"
     if first in {"android", "cloud", "config", "skill", "update"}:
@@ -270,32 +276,96 @@ def _take_session(args):
     return out
 
 
-def _run(args):
-    global _phone_name
-    args = _take_session(args)
-    if args and args[0] in {"-h", "--help"}:
-        print(USAGE)
-        return
-    if args and args[0] in {"--doctor", "doctor"}:
-        from .admin import run_doctor
-        sys.exit(run_doctor(args[1] if len(args) > 1 else None))
-    if args and args[0] == "android":
+# These three parse their own argv, including --help. A leading --help is
+# the top-level parser, so only a bare command name takes this path.
+# --version is handled before this, in any position.
+_OWNED = {"android", "cloud", "config"}
+
+
+def _version_text():
+    from .update import installed_version
+    return f"phone-harness {installed_version()}"
+
+
+def _build_parser():
+    parser = Parser(
+        prog="phone-harness",
+        description=USAGE.strip("\n"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("-V", "--version", action="version", version=_version_text())
+    parser.add_argument(
+        "--session", metavar="SID",
+        help="pin one cloud phone for this process (or set PHONE_HARNESS_SESSION)",
+    )
+    # Hidden alias of `doctor`. Help stays on the `doctor` subcommand.
+    parser.add_argument("--doctor", nargs="?", const="", default=None, metavar="PLATFORM",
+                        help=argparse.SUPPRESS)
+    sub = parser.add_subparsers(
+        dest="command", required=False,
+        metavar="{doctor,skill,config,update,cloud,android}",
+    )
+
+    doctor = sub.add_parser(
+        "doctor",
+        help="diagnose the phone the helpers would drive",
+        description="Diagnose the phone the helpers would drive.",
+    )
+    doctor.add_argument("platform", nargs="?", metavar="ios|android",
+                        help="ios or android (default: the configured platform)")
+    doctor.add_argument("extra", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+
+    skill = sub.add_parser(
+        "skill",
+        help="print the phone-harness skill text",
+        description="Print the phone-harness skill text.",
+    )
+    skill.add_argument("words", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+
+    sub.add_parser(
+        "config",
+        help="settings: config set platform android",
+        add_help=False,
+    ).add_argument("rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+
+    sub.add_parser(
+        "update",
+        help="update this install",
+        description="Update this install: uv tool upgrade, git pull, or the pip command.",
+    )
+
+    sub.add_parser(
+        "cloud",
+        help="rent a catalog phone",
+        add_help=False,
+    ).add_argument("rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+
+    sub.add_parser(
+        "android",
+        help="pair, connect, or choose an Android phone",
+        add_help=False,
+    ).add_argument("rest", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+    return parser, {"doctor": doctor, "skill": skill}
+
+
+def _reject_dashed(subparser, words):
+    bad = [w for w in words if str(w).startswith("-")]
+    if bad:
+        subparser.error("unrecognized arguments: " + " ".join(bad))
+
+
+def _dispatch_owned(name, rest):
+    if name == "android":
         from .android import cli
-        sys.exit(cli(args[1:]))
-    if args and args[0] == "cloud":
+    elif name == "cloud":
         from .cloud import cli
-        sys.exit(cli(args[1:]))
-    if args and args[0] == "config":
+    else:
         from .config import cli
-        sys.exit(cli(args[1:]))
-    if args and args[0] == "update":
-        from .update import cmd_update
-        sys.exit(cmd_update(args[1:]))
-    if args and args[0] == "skill":
-        _write_utf8(_skill_text())
-        return
-    if args or sys.stdin.isatty():
-        sys.exit(USAGE)
+    sys.exit(cli(rest))
+
+
+def _exec_script():
+    global _phone_name
     code = sys.stdin.read()
     if not code.strip():
         sys.exit(USAGE)
@@ -310,6 +380,47 @@ def _run(args):
         g[k] = v
     g["__name__"] = "__main__"
     exec(code, g)
+
+
+def _run(args):
+    args = _take_session(list(args))
+    if any(tok in {"-V", "--version"} for tok in args):
+        print(_version_text())
+        sys.exit(0)
+    if not args:
+        if sys.stdin.isatty():
+            sys.stderr.write(USAGE)
+            sys.exit(2)
+        _exec_script()
+        return
+    # `--help` on these groups is their own usage text, not the top-level one.
+    if args[0] in _OWNED:
+        _dispatch_owned(args[0], args[1:])
+        return
+    parser, subs = _build_parser()
+    ns = parser.parse_args(args)
+    if ns.session:
+        os.environ["PHONE_HARNESS_SESSION"] = ns.session
+    if ns.command == "doctor" or (ns.command is None and ns.doctor is not None):
+        if ns.command == "doctor":
+            _reject_dashed(subs["doctor"], ns.extra)
+            platform = ns.platform
+        else:
+            platform = ns.doctor or None
+        from .admin import run_doctor
+        sys.exit(run_doctor(platform))
+    if ns.command == "skill":
+        _reject_dashed(subs["skill"], ns.words)
+        _write_utf8(_skill_text())
+        return
+    if ns.command == "update":
+        from .update import cmd_update
+        sys.exit(cmd_update([]))
+    if ns.command in _OWNED:
+        _dispatch_owned(ns.command, list(ns.rest))
+        return
+    sys.stderr.write(USAGE)
+    sys.exit(2)
 
 
 if __name__ == "__main__":

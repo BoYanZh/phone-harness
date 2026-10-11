@@ -37,6 +37,7 @@ Files are versioned, read forgivingly (a corrupt file is a warning and
 defaults, never a crash) and written atomically. Unknown keys survive a
 round trip. This module owns the disk; backends ask it.
 """
+import argparse
 import json
 import os
 import sys
@@ -323,9 +324,33 @@ CLI_USAGE = """Usage:
 """
 
 
+def _config_parser():
+    from .term import Parser
+    parser = Parser(
+        prog="phone-harness config",
+        description=CLI_USAGE.strip("\n"),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="cmd", required=False, metavar="{get,set,unset,path}")
+    get = sub.add_parser("get", help="print one setting",
+                         description="Print one setting as JSON.")
+    get.add_argument("key", metavar="KEY", help="setting name")
+    setp = sub.add_parser("set", help="set one setting",
+                          description="Set one setting. platform must be ios or android.")
+    setp.add_argument("key", metavar="KEY", help="setting name")
+    setp.add_argument("value", metavar="VALUE", help="new value")
+    unset = sub.add_parser("unset", help="remove one setting",
+                           description="Remove one setting from the config file.")
+    unset.add_argument("key", metavar="KEY", help="setting name")
+    path = sub.add_parser("path", help="where the files live",
+                          description="Print where the config, state, and cache files live.")
+    path.add_argument("extra", nargs=argparse.REMAINDER, help=argparse.SUPPRESS)
+    return parser
+
+
 def cli(args):
-    cmd = args[0] if args else None
-    if cmd is None:
+    ns = _config_parser().parse_args(list(args))
+    if ns.cmd is None:
         for key in known_keys():
             value, source = lookup(key)
             print(f"{key:<22} {json.dumps(value):<10} ({source})")
@@ -333,21 +358,21 @@ def cli(args):
             if k != "version" and not isinstance(v, dict) and k not in known_keys():
                 print(f"{k:<22} {json.dumps(v):<10} (file, unknown key)")
         return 0
-    if cmd == "get" and len(args) == 2:
-        value, source = lookup(args[1])
-        print(json.dumps(value) if source != "unset" else f"{args[1]}: unset")
+    if ns.cmd == "get":
+        value, source = lookup(ns.key)
+        print(json.dumps(value) if source != "unset" else f"{ns.key}: unset")
         return 0 if source != "unset" else 1
-    if cmd == "set" and len(args) == 3:
-        if args[1] == "platform" and args[2] not in ("ios", "android"):
+    if ns.cmd == "set":
+        if ns.key == "platform" and ns.value not in ("ios", "android"):
             print("platform must be ios or android"); return 2
-        v = set(args[1], args[2])
-        print(f"{args[1]} = {json.dumps(v)}")
+        v = set(ns.key, ns.value)
+        print(f"{ns.key} = {json.dumps(v)}")
         return 0
-    if cmd == "unset" and len(args) == 2:
-        unset(args[1]); print(f"{args[1]} unset"); return 0
-    if cmd == "path":
-        for k, v in paths().items():
-            print(f"{k:<8} {v}")
-        return 0
-    print(CLI_USAGE)
-    return 2
+    if ns.cmd == "unset":
+        unset(ns.key); print(f"{ns.key} unset"); return 0
+    bad = [w for w in ns.extra if str(w).startswith("-")]
+    if bad:
+        _config_parser().error("unrecognized arguments: " + " ".join(bad))
+    for k, v in paths().items():
+        print(f"{k:<8} {v}")
+    return 0

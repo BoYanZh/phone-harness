@@ -56,7 +56,10 @@ tap_text("New Note")
 type_text("hello from the harness")
 print([o["text"] for o in ocr()][:10])
 PY
+phone-harness --version
 ```
+
+`phone-harness --version` (or `-V`) prints `phone-harness <version>`.
 
 Helpers are pre-imported. [SKILL.md](SKILL.md) is the agent's day-to-day
 guide; [helpers.py](src/phone_harness/helpers.py) is the full list.

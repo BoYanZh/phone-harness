@@ -470,6 +470,8 @@ on the next run. For setup or permission problems, read `install.md`.
 
 ## Updates
 
+`phone-harness --version` prints `phone-harness <version>`.
+
 `phone-harness update` brings this install up to date. A uv tool runs
 `uv tool upgrade phone-harness`. A git checkout runs `git pull --ff-only`
 in that checkout. Anything else prints `pip install -U phone-harness` and

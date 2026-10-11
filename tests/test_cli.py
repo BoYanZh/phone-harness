@@ -15,7 +15,8 @@ if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
 from phone_harness import android, cloud, term  # noqa: E402
-from phone_harness.run import USAGE  # noqa: E402
+from phone_harness.run import USAGE, _run as run_main  # noqa: E402
+from phone_harness.update import installed_version  # noqa: E402
 
 
 def _run(*args, stdin=None, env=None):
@@ -56,8 +57,9 @@ class HelpAndFlags(unittest.TestCase):
         self.assertEqual(unknown.stderr, "")
 
         bogus = _run("--bogus")
-        self.assertNotEqual(bogus.returncode, 0)
-        self.assertIn("Commands:", bogus.stderr)
+        self.assertEqual(bogus.returncode, 2)
+        self.assertIn("unrecognized arguments: --bogus", bogus.stderr)
+        self.assertNotIn("Commands:", bogus.stdout)
 
     def test_every_subcommand_has_help_and_rejects_a_bad_flag(self):
         cloud_cmds = {
@@ -303,6 +305,135 @@ class Color(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertNotIn("\x1b", err.getvalue())
         self.assertIn("--temp was removed", err.getvalue())
+
+
+class TopLevel(unittest.TestCase):
+    def test_version_prints_the_installed_package_version(self):
+        expected = f"phone-harness {installed_version()}\n"
+        for flag in ("--version", "-V"):
+            got = _run(flag)
+            self.assertEqual(got.returncode, 0, got.stderr)
+            self.assertEqual(got.stdout, expected)
+            self.assertEqual(got.stderr, "")
+            got.stdout.encode("ascii")
+        for args in (["cloud", "--version"], ["android", "-V"], ["config", "--version"],
+                     ["update", "-V"], ["skill", "--version"], ["doctor", "-V"]):
+            got = _run(*args)
+            self.assertEqual(got.returncode, 0, (args, got.stderr, got.stdout))
+            self.assertEqual(got.stdout, expected, args)
+
+    def test_unknown_command_and_flag_exit_2_and_name_themselves(self):
+        command = _run("no-such-command")
+        self.assertEqual(command.returncode, 2)
+        self.assertIn("no-such-command", command.stderr)
+        self.assertEqual(command.stdout, "")
+        command.stderr.encode("ascii")
+
+        flag = _run("--no-such-flag")
+        self.assertEqual(flag.returncode, 2)
+        self.assertIn("unrecognized arguments: --no-such-flag", flag.stderr)
+        self.assertEqual(flag.stdout, "")
+        flag.stderr.encode("ascii")
+
+        nested = _run("doctor", "--no-such-flag")
+        self.assertEqual(nested.returncode, 2)
+        self.assertIn("--no-such-flag", nested.stderr)
+
+    def test_every_top_level_command_has_help(self):
+        cases = (
+            (["doctor", "--help"], "ios|android"),
+            (["doctor", "-h"], "ios or android"),
+            (["skill", "--help"], "phone-harness skill"),
+            (["skill", "-h"], "show this help message"),
+            (["config", "--help"], "config get"),
+            (["config", "-h"], "config set"),
+            (["config", "get", "--help"], "KEY"),
+            (["config", "set", "-h"], "VALUE"),
+            (["config", "unset", "--help"], "KEY"),
+            (["config", "path", "--help"], "config, state, and cache"),
+            (["update", "--help"], "uv tool upgrade"),
+            (["update", "-h"], "pip command"),
+            (["cloud", "--help"], "cloud ls"),
+            (["android", "--help"], "android pair"),
+        )
+        for args, needle in cases:
+            got = _run(*args)
+            self.assertEqual(got.returncode, 0, (args, got.stderr, got.stdout))
+            self.assertIn(needle, got.stdout, args)
+            self.assertNotIn("\x1b", got.stdout)
+            got.stdout.encode("ascii")
+        skill_help = _run("skill", "--help")
+        self.assertNotIn("Which phone", skill_help.stdout)
+        skill = _run("skill")
+        self.assertEqual(skill.returncode, 0, skill.stderr)
+        self.assertIn("Which phone", skill.stdout)
+        options = _run("--help").stdout.split("options:", 1)[-1]
+        self.assertNotIn("--doctor", options)
+
+    def test_session_before_the_subcommand_still_pins_the_phone(self):
+        home = Path("/tmp") / "ph-session-place"
+        env = {"PHONE_HARNESS_HOME": str(home),
+               "PH_AGENT_WORKSPACE": str(home / "ws"),
+               "PHONE_HARNESS_PLATFORM": "android"}
+        pinned = _run("--session", "sid-placed",
+                      stdin="import os\nprint(os.environ['PHONE_HARNESS_SESSION'])\n",
+                      env=env)
+        self.assertEqual(pinned.returncode, 0, pinned.stderr)
+        self.assertIn("sid-placed", pinned.stdout)
+
+        middle = _run("cloud", "--session", "abc123", "ls", "--help")
+        self.assertEqual(middle.returncode, 0, middle.stderr)
+        self.assertIn("phone-harness cloud ls", middle.stdout)
+
+        version = _run("--session", "abc123", "--version")
+        self.assertEqual(version.returncode, 0, version.stderr)
+        self.assertTrue(version.stdout.startswith("phone-harness "))
+
+    def test_no_args_on_a_tty_prints_usage_to_stderr_and_exits_2(self):
+        err = io.StringIO()
+        with mock.patch("sys.stdin", Tty()), mock.patch("sys.stderr", err):
+            with self.assertRaises(SystemExit) as caught:
+                run_main([])
+        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(err.getvalue(), USAGE)
+        err.getvalue().encode("ascii")
+
+    def test_doctor_alias_still_dispatches_and_help_does_not(self):
+        with mock.patch("phone_harness.admin.run_doctor", return_value=0) as doctor:
+            for argv, platform in ((["--doctor"], None),
+                                   (["--doctor", "ios"], "ios"),
+                                   (["doctor", "android"], "android"),
+                                   (["doctor"], None)):
+                with self.assertRaises(SystemExit) as caught:
+                    run_main(argv)
+                self.assertEqual(caught.exception.code, 0, argv)
+                self.assertEqual(doctor.call_args.args[0], platform)
+        help_out = _run("doctor", "--help")
+        self.assertEqual(help_out.returncode, 0, help_out.stderr)
+        self.assertNotIn("all clear", help_out.stdout)
+
+    def test_config_set_output_is_unchanged(self):
+        home = Path("/tmp") / "ph-config-cli"
+        env = {"PHONE_HARNESS_HOME": str(home)}
+        bad = _run("config", "set", "platform", "nope", env=env)
+        self.assertEqual(bad.returncode, 2)
+        self.assertIn("platform must be ios or android", bad.stdout)
+        good = _run("config", "set", "platform", "android", env=env)
+        self.assertEqual(good.returncode, 0, good.stderr)
+        self.assertIn('platform = "android"', good.stdout)
+        got = _run("config", "get", "platform", env=env)
+        self.assertEqual(got.returncode, 0, got.stderr)
+        self.assertEqual(got.stdout.strip(), '"android"')
+
+    def test_docs_mention_version(self):
+        root = Path(__file__).resolve().parents[1]
+        readme = (root / "README.md").read_text(encoding="utf-8")
+        skill = (root / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("phone-harness --version", readme)
+        self.assertIn("phone-harness --version", skill)
+        version_line = next(line for line in readme.splitlines() if "phone-harness --version" in line)
+        version_line.encode("ascii")
+        skill.encode("ascii")
 
 
 class SessionAndStdinGuard(unittest.TestCase):
