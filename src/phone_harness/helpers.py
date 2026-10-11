@@ -1,9 +1,12 @@
 """Phone control — one flat API over any device.
 
 Core helpers live here. Agent-editable helpers live in
-PH_AGENT_WORKSPACE/agent_helpers.py (defaults to <repo>/agent-workspace).
-That directory is created from the packaged defaults when it is missing;
-an existing one is left alone.
+PH_AGENT_WORKSPACE/agent_helpers.py. A checkout uses
+<repo>/agent-workspace. A pip or uv install uses
+~/.phone-harness/agent-workspace, or
+~/.local/share/phone-harness/agent-workspace when ~/.phone-harness is
+itself a git checkout. That directory is created from the packaged
+defaults when it is missing; an existing one is left alone.
 
 Everything below is a thin wrapper over send(), which is defined first on
 purpose: the helpers are conveniences, not a wall. Drop to send() for anything

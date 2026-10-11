@@ -57,9 +57,10 @@ PY
 
 Helpers are pre-imported. [SKILL.md](SKILL.md) is the agent's day-to-day
 guide; [helpers.py](src/phone_harness/helpers.py) is the full list.
-Task-specific helpers live in `agent-workspace/agent_helpers.py`. A pip or
-uv install creates that directory from the packaged defaults when it is
-missing, and never overwrites an existing one.
+Task-specific helpers live in `agent-workspace/agent_helpers.py` in a
+checkout. A pip or uv install uses `~/.phone-harness/agent-workspace`
+(see [install.md](install.md)), creates it from the packaged defaults
+when it is missing, and never overwrites an existing one.
 
 ## No phone on your desk? Rent one
 

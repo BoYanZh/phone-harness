@@ -3,12 +3,23 @@
 The repo's ``agent-workspace/`` is the only copy of those files. The wheel
 force-includes that directory at ``phone_harness/agent_workspace/``.
 
-Resolution is unchanged: ``PH_AGENT_WORKSPACE``, else ``<repo>/agent-workspace``.
-A checkout already has that directory, so nothing is copied. When the
-resolved directory does not exist, it is created from those defaults. An
-existing directory is never modified, even if it is only partly filled in.
-``phone-harness workspace update`` is the opt-in that copies default files
-that are missing and reports the ones that differ, without touching them.
+Resolution:
+
+  PH_AGENT_WORKSPACE if set, else
+  <repo>/agent-workspace when this package sits in a git checkout
+  (that directory contains ``.git`` and ``agent-workspace/``), else
+  ~/.phone-harness/agent-workspace, unless ~/.phone-harness is itself a
+  git checkout, in which case
+  $XDG_DATA_HOME/phone-harness/agent-workspace, or
+  ~/.local/share/phone-harness/agent-workspace when XDG_DATA_HOME is unset.
+
+The last two are outside any install prefix, so a pip or uv upgrade does
+not wipe helpers an agent added. The same path is used on every OS.
+
+A missing directory is created from those defaults. An existing directory
+is never modified, even if it is only partly filled in.
+``phone-harness workspace update`` copies default files that are missing
+and reports the ones that differ, without touching them.
 """
 import os
 import shutil
@@ -26,19 +37,49 @@ _SKIPPED_NAMES = {".env", ".DS_Store", "__pycache__"}
 
 
 def repo_root():
-    """Two parents above this package: the checkout root, or the install prefix."""
+    """Two parents above this package.
+
+    In a checkout that is the repo root. In a pip or uv install it lands
+    inside the prefix (``lib/pythonX.Y``), which is not a place to store
+    helpers: that tree is replaced on upgrade.
+    """
     return Path(__file__).resolve().parent.parent.parent
 
 
-def resolved_agent_workspace():
-    """``PH_AGENT_WORKSPACE`` if set, else ``<repo>/agent-workspace``.
+def _is_git_checkout(path):
+    """True when ``path`` is a git work tree. ``.git`` may be a file."""
+    return (path / ".git").exists()
 
-    An empty value is honoured, matching the previous ``os.environ.get``
-    fallback (the default is used only when the variable is unset).
+
+def _user_agent_workspace():
+    """Per-user workspace, never inside an install prefix.
+
+    ``~/.phone-harness`` is the canonical clone (see install.md). When that
+    path is a checkout, its ``agent-workspace/`` belongs to the checkout;
+    an install uses the data directory instead of writing into the clone.
+    """
+    canonical = Path.home() / ".phone-harness"
+    if not _is_git_checkout(canonical):
+        return canonical / "agent-workspace"
+    base = os.environ.get("XDG_DATA_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "share"
+    return root / "phone-harness" / "agent-workspace"
+
+
+def resolved_agent_workspace():
+    """Where agent helpers live.
+
+    ``PH_AGENT_WORKSPACE`` if set (an empty value is honoured; the default
+    applies only when the variable is unset). Otherwise the checkout's
+    ``agent-workspace/`` when this package is running from one, otherwise
+    the per-user directory from ``_user_agent_workspace``.
     """
     if "PH_AGENT_WORKSPACE" in os.environ:
         return Path(os.environ["PH_AGENT_WORKSPACE"])
-    return repo_root() / "agent-workspace"
+    root = repo_root()
+    if _is_git_checkout(root) and (root / "agent-workspace").is_dir():
+        return root / "agent-workspace"
+    return _user_agent_workspace()
 
 
 def packaged_defaults():

@@ -20,8 +20,17 @@ if str(SRC) not in sys.path:
 
 from phone_harness.workspace import (  # noqa: E402
     ensure_agent_workspace,
+    resolved_agent_workspace,
     update_workspace,
 )
+
+
+def _inside(child, parent):
+    try:
+        Path(child).resolve().relative_to(Path(parent).resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def _run(code, workspace, home, *args):
@@ -150,6 +159,47 @@ class AgentWorkspace(unittest.TestCase):
         self.assertEqual(DEFAULT_HELPERS.read_bytes(), before)
         self.assertEqual(sorted(p.name for p in DEFAULT_HELPERS.parent.iterdir()), names)
 
+    def test_a_git_checkout_uses_its_own_agent_workspace(self):
+        self.assertTrue((ROOT / ".git").exists())
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PH_AGENT_WORKSPACE", None)
+            dest = resolved_agent_workspace()
+        self.assertEqual(dest, ROOT / "agent-workspace")
+
+    def test_a_prefix_without_git_resolves_outside_it(self):
+        prefix = Path(self.tmp.name) / "tool" / "lib" / "python3.12"
+        prefix.mkdir(parents=True)
+        self.home.mkdir()
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PH_AGENT_WORKSPACE", None)
+            os.environ.pop("XDG_DATA_HOME", None)
+            with mock.patch("phone_harness.workspace.repo_root", return_value=prefix), \
+                 mock.patch("phone_harness.workspace.Path.home", return_value=self.home):
+                dest = resolved_agent_workspace()
+        self.assertEqual(dest, self.home / ".phone-harness" / "agent-workspace")
+        self.assertFalse(_inside(dest, prefix))
+
+        (self.home / ".phone-harness" / ".git").mkdir(parents=True)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("PH_AGENT_WORKSPACE", None)
+            os.environ.pop("XDG_DATA_HOME", None)
+            with mock.patch("phone_harness.workspace.repo_root", return_value=prefix), \
+                 mock.patch("phone_harness.workspace.Path.home", return_value=self.home):
+                dest = resolved_agent_workspace()
+        data = self.home / ".local" / "share" / "phone-harness" / "agent-workspace"
+        self.assertEqual(dest, data)
+        self.assertFalse(_inside(dest, prefix))
+        self.assertFalse(_inside(dest, self.home / ".phone-harness"))
+
+        xdg = Path(self.tmp.name) / "xdg"
+        with mock.patch.dict(os.environ, {"XDG_DATA_HOME": str(xdg)}, clear=False):
+            os.environ.pop("PH_AGENT_WORKSPACE", None)
+            with mock.patch("phone_harness.workspace.repo_root", return_value=prefix), \
+                 mock.patch("phone_harness.workspace.Path.home", return_value=self.home):
+                dest = resolved_agent_workspace()
+        self.assertEqual(dest, xdg / "phone-harness" / "agent-workspace")
+        self.assertFalse(_inside(dest, prefix))
+
     def test_seed_skips_a_dotenv_beside_the_defaults(self):
         source = Path(self.tmp.name) / "defaults"
         source.mkdir()
@@ -265,3 +315,61 @@ class PackagedWorkspace(unittest.TestCase):
         self.assertEqual((empty / "agent_helpers.py").read_bytes(),
                          DEFAULT_HELPERS.read_bytes())
         self.assertEqual((empty / "my_helpers.py").read_text(), "mine = True\n")
+
+    def test_an_install_resolves_outside_the_prefix(self):
+        """A wheel install must not park helpers under lib/pythonX.Y.
+
+        ``repo_root()`` there is inside the prefix and is replaced on
+        upgrade. ``HOME`` is a temp directory so this does not touch the
+        real ``~/.phone-harness``.
+        """
+        target = self.out / "prefix"
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--no-deps",
+             "--target", str(target), str(self.wheel)],
+            capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr or r.stdout)
+        home_tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(home_tmp.cleanup)
+        home = Path(home_tmp.name)
+
+        def installed():
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(target)
+            env["HOME"] = str(home)
+            env.pop("PH_AGENT_WORKSPACE", None)
+            env.pop("XDG_DATA_HOME", None)
+            env["PHONE_HARNESS_HOME"] = str(home / "state")
+            env["PHONE_HARNESS_PLATFORM"] = "android"
+            env["PHONE_HARNESS_TELEMETRY"] = "0"
+            env.pop("PHONE_HARNESS_SESSION", None)
+            return subprocess.run(
+                [sys.executable, "-c",
+                 "from phone_harness.workspace import agent_workspace, repo_root\n"
+                 "print(repo_root())\n"
+                 "print(agent_workspace())\n"],
+                capture_output=True, text=True, env=env, cwd=home)
+
+        r = installed()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        prefix, ws = [Path(line) for line in r.stdout.splitlines()]
+        self.assertEqual(ws, home / ".phone-harness" / "agent-workspace")
+        self.assertFalse(_inside(ws, target))
+        self.assertFalse(_inside(ws, prefix))
+        self.assertEqual((ws / "agent_helpers.py").read_bytes(),
+                         DEFAULT_HELPERS.read_bytes())
+        self.assertFalse((prefix / "agent-workspace").exists())
+
+        (ws / "agent_helpers.py").write_text("VALUE = 'kept'\n")
+        (home / ".phone-harness" / ".git").mkdir()
+        r = installed()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        prefix, ws2 = [Path(line) for line in r.stdout.splitlines()]
+        data = home / ".local" / "share" / "phone-harness" / "agent-workspace"
+        self.assertEqual(ws2, data)
+        self.assertFalse(_inside(ws2, target))
+        self.assertFalse(_inside(ws2, prefix))
+        self.assertFalse(_inside(ws2, home / ".phone-harness"))
+        self.assertEqual((ws / "agent_helpers.py").read_text(), "VALUE = 'kept'\n")
+        self.assertEqual((ws2 / "agent_helpers.py").read_bytes(),
+                         DEFAULT_HELPERS.read_bytes())
