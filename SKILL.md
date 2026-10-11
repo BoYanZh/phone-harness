@@ -432,10 +432,13 @@ events into it for hands. All coordinates are global macOS screen points.
   quoting the screen (`connection_state()` is `ready` / `blocked` /
   `no-window` / `not-running`). `connection_detail()` returns the labels and
   button titles in the window, with no screenshot, so you can see why it is
-  blocked. **STOP and relay it**, ask the user to lock the phone, and retry
-  once when they say so. The app reconnects by itself
-  the moment the phone is locked, so the retry usually finds it live; if
-  not, it presses Connect again. Do not press it yourself in a loop and do
+  blocked. **STOP and relay the error.** It names the next step: lock the
+  iPhone when the window says in use, timed out, or lock your iPhone; approve
+  or cancel when the Mac asks for Touch ID or a password (never type one);
+  otherwise clear the window on the Mac. Retry once when the user says it is
+  done. When the phone was in use, the app reconnects by itself the moment
+  the phone is locked, so that retry usually finds it live; if not, it
+  presses Connect again. Do not press it yourself in a loop and do
   not tap the window (an interstitial is a Mac view; taps meant for the
   phone go nowhere). **Unlocking the physical phone pauses the session**
   ("iPhone in Use") - the same rule applies mid-task. Taps, scrolls, swipes,
@@ -443,8 +446,8 @@ events into it for hands. All coordinates are global macOS screen points.
   message and do not press Connect. `screenshot()` and `screen_info()` still
   work while the mirroring window is open, including when the state is
   blocked. Call `screenshot()` to see what the window shows. Ask the user
-  to lock the phone, then call `ensure_device()` and continue from the step
-  that raised.
+  to do what the error says, then call `ensure_device()` and continue from
+  the step that raised.
   The Mac login prompt that
   sometimes appears in the window is never typed into.
 - **Unfocused input is swallowed silently - for events you post yourself.**

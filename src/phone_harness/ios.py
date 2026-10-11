@@ -301,14 +301,16 @@ class IPhone(Backend):
                 "iPhone Mirroring is open but shows no phone window. Pair "
                 "the phone in the app (it has to be nearby, locked, and "
                 "signed in to the same Apple Account), then retry.")
-        said = self._session_detail() or "an interstitial with no text"
+        said = (self._session_detail() or "an interstitial with no text").strip()
         did = (f"I pressed {pressed} and it came back with"
                if pressed else "It says")
+        # The quote often already ends with a period ("...to connect.").
+        # Adding another one produced "connect.. This needs you".
+        stop = "" if said.endswith((".", "!", "?")) else "."
         raise RuntimeError(
-            f"iPhone Mirroring is not connected. {did}: {said}. This needs "
-            "you: if it mentions the iPhone being in use or timing out, LOCK "
-            "your iPhone, then tell me and I will try once more. I never "
-            "type a passcode. Call screenshot() to see what the window shows.")
+            f"iPhone Mirroring is not connected. {did}: {said}{stop} "
+            f"{_blocked_guidance(said)} "
+            "Call screenshot() to see what the window shows.")
 
     def _show(self):
         """Bring the mirroring window to the front so the user can watch.
@@ -498,6 +500,31 @@ class IPhone(Backend):
 
     def _focus_diff(self, before, after):
         return self.mirror.interruption(before, after)
+
+
+def _blocked_guidance(said):
+    """What to tell the user, from the words already quoted.
+
+    Lock the iPhone only when the window says it is in use, timed out, or
+    to lock the iPhone. A Mac Touch ID or password sheet is the user's to
+    approve or cancel. Anything else is cleared on the Mac.
+    """
+    low = said.lower()
+    if any(p in low for p in ("in use", "timed out", "lock your iphone")):
+        return ("This needs you: LOCK your iPhone, then tell me and I will "
+                "try once more. I never type a passcode.")
+    if "touch id" in low or _has_word(low, "password"):
+        return ("This needs you: the Mac is asking for Touch ID or a password. "
+                "Approve it or cancel it. I never type a password.")
+    return "This needs you: clear this on the Mac."
+
+
+def _has_word(text, word):
+    """True when `word` is its own word. 'password' does not match 'Passwords'."""
+    padded = text.lower()
+    for ch in ".,:;!?\"'":
+        padded = padded.replace(ch, " ")
+    return f" {word} " in f" {padded} "
 
 
 # Buttons an interstitial offers that mean "try to connect"; pressed once

@@ -63,6 +63,13 @@ IN_USE_RETRYING = [("AXStaticText", "iPhone in Use"),
                    ("AXStaticText", "Lock your iPhone to connect.")]
 LOGIN = [("AXStaticText", "Enter the Mac login password"),
          ("AXSecureTextField", ""), ("AXButton", "Unlock")]
+# macOS draws this sheet over the mirroring window. Blocked is correct.
+# The words are a Mac password prompt, not "lock your iPhone".
+TOUCH_ID = [("AXStaticText", "Passwords"),
+            ("AXStaticText", "Authenticate to access Passwords. Touch ID or "
+                             "enter your password to continue."),
+            ("AXButton", "Home Screen"), ("AXButton", "App Switcher"),
+            ("AXButton", "Cancel")]
 LIVE = []
 
 
@@ -262,7 +269,10 @@ class SessionRequire(unittest.TestCase):
                        IN_USE_RETRYING)
         with self.assertRaises(RuntimeError) as cm:
             p._session_require()
-        self.assertIn("iPhone in Use", str(cm.exception))
+        msg = str(cm.exception)
+        self.assertIn("iPhone in Use", msg)
+        self.assertIn("LOCK your iPhone", msg)
+        self.assertNotIn("..", msg)
         self.assertLess(self.clock[0], 5.0, "gave up within a few seconds")
         self.assertEqual(p.mirror.shown, 1, "the window was raised even so")
 
@@ -271,7 +281,10 @@ class SessionRequire(unittest.TestCase):
         with self.assertRaises(RuntimeError) as cm:
             p._session_require()
         self.assertEqual(p.mirror.pressed, [])
-        self.assertIn("Connecting to", str(cm.exception))
+        msg = str(cm.exception)
+        self.assertIn("Connecting to", msg)
+        self.assertIn("clear this on the Mac", msg)
+        self.assertNotIn("LOCK your iPhone", msg)
         self.assertGreaterEqual(self.clock[0], ios._CONNECT_WAIT,
                                 "a Connecting screen is waited out to the cap")
 
@@ -291,7 +304,10 @@ class SessionRequire(unittest.TestCase):
         p = self.phone(None, None, BLANK)
         with self.assertRaises(RuntimeError) as cm:
             p._session_require()
-        self.assertIn("an interstitial with no text", str(cm.exception))
+        msg = str(cm.exception)
+        self.assertIn("an interstitial with no text", msg)
+        self.assertIn("clear this on the Mac", msg)
+        self.assertNotIn("..", msg)
         self.assertEqual(p.mirror.launched, 1)
         self.assertEqual(p.mirror.pressed, [])
         self.assertGreaterEqual(self.clock[0], ios._CONNECT_WAIT)
@@ -312,8 +328,25 @@ class SessionRequire(unittest.TestCase):
         p = self.phone(LOGIN)
         with self.assertRaises(RuntimeError) as cm:
             p._session_require()
+        msg = str(cm.exception)
         self.assertEqual(p.mirror.pressed, [])
-        self.assertIn("login password", str(cm.exception))
+        self.assertIn("login password", msg)
+        self.assertIn("Touch ID or a password", msg)
+        self.assertIn("never type a password", msg)
+        self.assertNotIn("LOCK your iPhone", msg)
+
+    def test_touch_id_sheet_asks_the_user_to_approve_or_cancel(self):
+        p = self.phone(TOUCH_ID)
+        with self.assertRaises(RuntimeError) as cm:
+            p._session_require()
+        msg = str(cm.exception)
+        self.assertEqual(p.mirror.pressed, [])
+        self.assertIn("Touch ID", msg)
+        self.assertIn("Approve it or cancel it", msg)
+        self.assertIn("never type a password", msg)
+        self.assertIn("screenshot()", msg)
+        self.assertNotIn("LOCK your iPhone", msg)
+        self.assertNotIn("..", msg)
 
     def test_launch_without_a_window_raises(self):
         p = self.phone(None, None, "no-window")
