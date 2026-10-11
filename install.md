@@ -34,9 +34,8 @@ phone-harness skill > "${CODEX_HOME:-$HOME/.codex}/skills/phone-harness/SKILL.md
   this repo keeps using its own `agent-workspace/`. `PH_AGENT_WORKSPACE`
   overrides all of these. The first run copies the packaged defaults
   when that directory does not exist. An existing workspace is left
-  untouched, including a custom `agent_helpers.py`. `phone-harness
-  workspace update` copies default files that are missing and prints
-  which files differ, without changing them.
+  untouched, including a custom `agent_helpers.py`. To get a fresh
+  default, delete the workspace folder; it is recreated on the next run.
 - The default phone is `phone-harness config set platform ios|android`;
   `phone-harness config` shows every setting and where it came from;
   `PHONE_HARNESS_PLATFORM=android phone-harness …` overrides for one call.

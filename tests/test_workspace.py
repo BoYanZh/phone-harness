@@ -21,7 +21,6 @@ if str(SRC) not in sys.path:
 from phone_harness.workspace import (  # noqa: E402
     ensure_agent_workspace,
     resolved_agent_workspace,
-    update_workspace,
 )
 
 
@@ -33,7 +32,7 @@ def _inside(child, parent):
     return True
 
 
-def _run(code, workspace, home, *args):
+def _run(code, workspace, home):
     env = os.environ.copy()
     env["PYTHONPATH"] = str(SRC)
     env["PH_AGENT_WORKSPACE"] = str(workspace)
@@ -41,9 +40,8 @@ def _run(code, workspace, home, *args):
     env["PHONE_HARNESS_PLATFORM"] = "android"
     env["PHONE_HARNESS_TELEMETRY"] = "0"
     env.pop("PHONE_HARNESS_SESSION", None)
-    cmd = [sys.executable, "-c", code] if code is not None else [
-        sys.executable, "-m", "phone_harness.run", *args]
-    return subprocess.run(cmd, capture_output=True, text=True, env=env)
+    return subprocess.run([sys.executable, "-c", code], capture_output=True,
+                          text=True, env=env)
 
 
 class AgentWorkspace(unittest.TestCase):
@@ -52,13 +50,6 @@ class AgentWorkspace(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name) / "home"
         self.ws = Path(self.tmp.name) / "workspace"
-
-    def test_update_on_a_missing_workspace_still_seeds_it(self):
-        r = _run(None, self.ws, self.home, "workspace", "update")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual((self.ws / "agent_helpers.py").read_bytes(),
-                         DEFAULT_HELPERS.read_bytes())
-        self.assertNotIn("differs", r.stdout)
 
     def test_a_missing_workspace_is_seeded_from_the_defaults(self):
         r = _run("import phone_harness.config", self.ws, self.home)
@@ -94,52 +85,6 @@ class AgentWorkspace(unittest.TestCase):
         self.assertFalse((self.ws / "agent_helpers.py").exists())
         self.assertEqual((self.ws / "my_helpers.py").read_text(), "mine = True\n")
 
-    def test_workspace_update_adds_only_missing_files(self):
-        source = Path(self.tmp.name) / "defaults"
-        nested = source / "notes"
-        nested.mkdir(parents=True)
-        (source / "agent_helpers.py").write_text("default helpers\n")
-        (source / "extra.py").write_text("extra\n")
-        (nested / "nested.py").write_text("nested\n")
-        (source / ".env").write_text("SECRET=1\n")
-
-        self.ws.mkdir()
-        (self.ws / "agent_helpers.py").write_text("# agent edited this\n")
-        (self.ws / "my_helpers.py").write_text("mine = True\n")
-
-        added, differ = update_workspace(self.ws, source)
-        self.assertEqual(added, ["extra.py", "notes/nested.py"])
-        self.assertEqual(differ, ["agent_helpers.py"])
-        self.assertEqual((self.ws / "agent_helpers.py").read_text(), "# agent edited this\n")
-        self.assertEqual((self.ws / "my_helpers.py").read_text(), "mine = True\n")
-        self.assertEqual((self.ws / "extra.py").read_text(), "extra\n")
-        self.assertEqual((self.ws / "notes" / "nested.py").read_text(), "nested\n")
-        self.assertFalse((self.ws / ".env").exists())
-
-        added, differ = update_workspace(self.ws, source)
-        self.assertEqual(added, [])
-        self.assertEqual(differ, ["agent_helpers.py"])
-        self.assertEqual((self.ws / "agent_helpers.py").read_text(), "# agent edited this\n")
-
-    def test_update_command_adds_a_missing_default_and_reports_edits(self):
-        self.ws.mkdir()
-        (self.ws / "my_helpers.py").write_text("mine = True\n")
-        r = _run(None, self.ws, self.home, "workspace", "update")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("added agent_helpers.py", r.stdout)
-        self.assertNotIn("differs", r.stdout)
-        self.assertNotIn("my_helpers.py", r.stdout)
-        self.assertEqual((self.ws / "agent_helpers.py").read_bytes(),
-                         DEFAULT_HELPERS.read_bytes())
-        self.assertEqual((self.ws / "my_helpers.py").read_text(), "mine = True\n")
-
-        (self.ws / "agent_helpers.py").write_text("# agent edited this\n")
-        r = _run(None, self.ws, self.home, "workspace", "update")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("differs agent_helpers.py", r.stdout)
-        self.assertNotIn("added", r.stdout)
-        self.assertEqual((self.ws / "agent_helpers.py").read_text(), "# agent edited this\n")
-
     def test_a_checkout_workspace_is_not_rewritten(self):
         before = DEFAULT_HELPERS.read_bytes()
         names = sorted(p.name for p in DEFAULT_HELPERS.parent.iterdir())
@@ -150,12 +95,9 @@ class AgentWorkspace(unittest.TestCase):
         env["PHONE_HARNESS_PLATFORM"] = "android"
         env["PHONE_HARNESS_TELEMETRY"] = "0"
         r = subprocess.run(
-            [sys.executable, "-m", "phone_harness.run", "workspace", "update"],
+            [sys.executable, "-c", "import phone_harness.config"],
             capture_output=True, text=True, env=env)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("no missing default files", r.stdout)
-        self.assertNotIn("differs", r.stdout)
-        self.assertNotIn("added", r.stdout)
         self.assertEqual(DEFAULT_HELPERS.read_bytes(), before)
         self.assertEqual(sorted(p.name for p in DEFAULT_HELPERS.parent.iterdir()), names)
 
@@ -278,7 +220,7 @@ class PackagedWorkspace(unittest.TestCase):
         self.assertTrue((target / "phone_harness" / "agent_workspace" /
                          "agent_helpers.py").is_file())
 
-        def installed(workspace, code=None, *args):
+        def installed(workspace, code):
             env = os.environ.copy()
             env["PYTHONPATH"] = str(target)
             env["PH_AGENT_WORKSPACE"] = str(workspace)
@@ -286,10 +228,9 @@ class PackagedWorkspace(unittest.TestCase):
             env["PHONE_HARNESS_PLATFORM"] = "android"
             env["PHONE_HARNESS_TELEMETRY"] = "0"
             env.pop("PHONE_HARNESS_SESSION", None)
-            cmd = [sys.executable, "-c", code] if code is not None else [
-                sys.executable, "-m", "phone_harness.run", *args]
-            return subprocess.run(cmd, capture_output=True, text=True,
-                                  env=env, cwd=self.out)
+            return subprocess.run(
+                [sys.executable, "-c", code], capture_output=True, text=True,
+                env=env, cwd=self.out)
 
         ws = self.out / "seeded"
         r = installed(ws,
@@ -308,26 +249,6 @@ class PackagedWorkspace(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual((ws / "agent_helpers.py").read_text(), "VALUE = 'custom'\n")
         self.assertEqual((ws / "my_helpers.py").read_text(), "mine = True\n")
-
-        partial = self.out / "partial"
-        partial.mkdir()
-        (partial / "agent_helpers.py").write_text("VALUE = 'kept'\n")
-        r = installed(partial, None, "workspace", "update")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("differs agent_helpers.py", r.stdout)
-        self.assertNotIn("added", r.stdout)
-        self.assertEqual((partial / "agent_helpers.py").read_text(), "VALUE = 'kept'\n")
-
-        empty = self.out / "empty"
-        empty.mkdir()
-        (empty / "my_helpers.py").write_text("mine = True\n")
-        r = installed(empty, None, "workspace", "update")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("added agent_helpers.py", r.stdout)
-        self.assertNotIn("my_helpers.py", r.stdout)
-        self.assertEqual((empty / "agent_helpers.py").read_bytes(),
-                         DEFAULT_HELPERS.read_bytes())
-        self.assertEqual((empty / "my_helpers.py").read_text(), "mine = True\n")
 
     def test_an_install_resolves_outside_the_prefix(self):
         """A wheel install must not park helpers under lib/pythonX.Y.

@@ -1,7 +1,8 @@
 """Default helpers an agent can edit, and how an install gets them.
 
-The repo's ``agent-workspace/`` is the only copy of those files. The wheel
-force-includes that directory at ``phone_harness/agent_workspace/``.
+The repo's ``agent-workspace/agent_helpers.py`` is the only copy of the
+default helper. The wheel force-includes that file at
+``phone_harness/agent_workspace/agent_helpers.py``.
 
 Resolution:
 
@@ -16,22 +17,15 @@ Resolution:
 The last two are outside any install prefix, so a pip or uv upgrade does
 not wipe helpers an agent added. The same path is used on every OS.
 
-A missing directory is created from those defaults. An existing directory
-is never modified, even if it is only partly filled in.
-``phone-harness workspace update`` copies default files that are missing
-and reports the ones that differ, without touching them.
+A missing directory is created from that default. An existing directory
+is never modified, even if it is only partly filled in. To get a fresh
+default, delete the workspace folder; it is recreated on the next run.
 """
 import os
 import shutil
 import sys
 import tempfile
 from pathlib import Path
-
-CLI_USAGE = """Usage:
-  phone-harness workspace update
-      copy default files missing from the agent workspace, and list
-      default files that differ, without changing them
-"""
 
 _SKIPPED_NAMES = {".env", ".DS_Store", "__pycache__"}
 
@@ -183,69 +177,3 @@ def agent_workspace():
     except OSError as exc:
         _warn_once(dest, exc)
         return dest
-
-
-def _merge(source, dest, rel, added, differ):
-    for child in _children(source):
-        rel_child = rel / child.name
-        target = dest / child.name
-        key = rel_child.as_posix()
-        if child.is_dir():
-            if target.exists() and not target.is_dir():
-                differ.append(key)
-                continue
-            if not target.exists():
-                target.mkdir()
-            _merge(child, target, rel_child, added, differ)
-            continue
-        if not child.is_file():
-            continue
-        data = child.read_bytes()
-        if not target.exists():
-            target.write_bytes(data)
-            added.append(key)
-        elif target.is_file():
-            if target.read_bytes() != data:
-                differ.append(key)
-        else:
-            differ.append(key)
-
-
-def update_workspace(dest, source=None):
-    """Copy default files that are missing under ``dest``.
-
-    Returns ``(added, differ)`` as forward-slash paths. Existing files are
-    never written, including ones whose bytes differ from the defaults.
-    """
-    dest = Path(dest)
-    if source is None:
-        source = packaged_defaults()
-    added, differ = [], []
-    if source is None or _same_dir(source, dest):
-        return added, differ
-    if dest.exists() and not dest.is_dir():
-        raise NotADirectoryError(dest)
-    if not dest.exists():
-        dest.mkdir(parents=True)
-    _merge(source, dest, Path(), added, differ)
-    return added, differ
-
-
-def cli(args):
-    if args != ["update"]:
-        print(CLI_USAGE)
-        return 2
-    dest = resolved_agent_workspace()
-    try:
-        added, differ = update_workspace(dest)
-    except OSError as exc:
-        print(f"phone-harness: {exc}", file=sys.stderr)
-        return 1
-    print(dest)
-    for name in added:
-        print(f"added {name}")
-    for name in differ:
-        print(f"differs {name}")
-    if not added and not differ:
-        print("no missing default files")
-    return 0

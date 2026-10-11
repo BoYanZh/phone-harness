@@ -74,8 +74,8 @@ PY
      `~/.phone-harness` is a git checkout, so an upgrade does not wipe
      it. `PH_AGENT_WORKSPACE` overrides that path. The directory is
      created from the defaults only when it is missing. An existing
-     workspace is never overwritten. `phone-harness workspace update`
-     adds default files you do not have yet and names files that differ.
+     workspace is never overwritten. To get a fresh default, delete the
+     workspace folder; it is recreated on the next run.
 - **The harness reports, you decide.** Helpers return observations, never a
   verdict on your intent. Diff two `ocr()` sets, watch one label, count rows,
   poll until something appears - whatever matches what you asked for.
@@ -408,6 +408,5 @@ a pip or uv install (or `~/.local/share/phone-harness/agent-workspace`
 when `~/.phone-harness` is a git checkout). `PH_AGENT_WORKSPACE`
 overrides that. Installs seed that directory from the packaged defaults
 when it does not exist yet; an existing workspace is left as it is.
-`phone-harness workspace update` adds default files that are missing
-and reports files that differ, without changing them. For setup or
-permission problems, read `install.md`.
+To get a fresh default, delete the workspace folder; it is recreated
+on the next run. For setup or permission problems, read `install.md`.
