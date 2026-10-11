@@ -19,6 +19,7 @@ is no one to click Approve.
 Stdlib only. API reference: https://phone-harness.com/docs
 """
 import json
+import math
 import os
 import shutil
 import sys
@@ -353,12 +354,26 @@ def _keeps_state(session):
     return bool(session.get("profile"))
 
 
+def _iphone_words(label):
+    """'your iPhone', plus a label only when the label is not itself 'iPhone'.
+
+    The catalog name for the one phone on an account is often just iPhone, and
+    'your iPhone, iPhone' says the same thing twice."""
+    text = " ".join(str(label).split()) if label else ""
+    if text.lower() in {"", "iphone", "your iphone"}:
+        return "your iPhone"
+    return f"your iPhone, {text}"
+
+
 def _kind_of_phone(session, label=None):
     """Wording for a session, from its link. A control link is an iPhone."""
     if _link_kind(session) == "control":
-        label = label or session.get("label")
-        return f"your iPhone, {label}" if label else "your iPhone"
-    return "your phone" if session.get("profile") else "temporary"
+        if label is None:
+            label = session.get("label")
+        return _iphone_words(label)
+    if session.get("profile") or session.get("profile_id"):
+        return "your phone"
+    return "temporary"
 
 
 def _adb_present():
@@ -532,10 +547,20 @@ def _money(cents):
 
 
 def _left(expires_at):
+    """How long the session has left, for a person reading it.
+
+    Minutes round up. `cloud start --for 6` still says 6 min after the phone
+    spends part of that first minute booting; flooring made it say 5. Under
+    two minutes the exact seconds stay.
+    """
     if not expires_at:
         return "?"
-    s = int(expires_at - time.time())
-    return "expired" if s <= 0 else f"{s // 60} min" if s >= 120 else f"{s}s"
+    remaining = expires_at - time.time()
+    if remaining <= 0:
+        return "expired"
+    if remaining < 120:
+        return f"{int(remaining)}s"
+    return f"{math.ceil(remaining / 60)} min"
 
 
 def _ago(ts):
@@ -771,8 +796,7 @@ def _needs_adb(entry, me):
 def _starting_line(entry, me):
     shown = entry if entry is not None else _unnamed(me)
     if shown and shown.get("platform") == "ios":
-        label = shown.get("label") or shown.get("id") or ""
-        return f"Starting your iPhone{', ' + label if label else ''}…"
+        return "Starting " + _iphone_words(shown.get("label") or shown.get("id") or "") + "…"
     if shown and shown.get("temporary"):
         return "Starting a temporary phone…"
     if shown and shown.get("label"):
@@ -1100,29 +1124,64 @@ def _status(args):
     return 0
 
 
-def _session_key(session):
-    """The catalog id a live session belongs to: its device id or its profile."""
-    phone = session.get("phone")
-    if session.get("device_id"):
-        return session["device_id"]
-    if isinstance(phone, str) and phone:
-        return phone
-    return session.get("profile") or None
+def _text_id(value):
+    """An id string, or the id inside a small object. Display text is not an id."""
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if isinstance(value, dict):
+        for key in ("id", "device_id", "profile_id"):
+            found = _text_id(value.get(key))
+            if found:
+                return found
+    return None
+
+
+def _id_set(mapping, keys):
+    found = set()
+    if not isinstance(mapping, dict):
+        return found
+    for key in keys:
+        text = _text_id(mapping.get(key))
+        if text:
+            found.add(text)
+    return found
+
+
+# `phone` used to be a saved-phone id. The live API also puts a display name
+# there ("iPhone", "Android emulator"); those are not catalog ids.
+_PHONE_DISPLAY_NAMES = {"iphone", "android", "android emulator", "your iphone", "your phone"}
+
+
+def _session_ids(session):
+    """device ids and profile ids this session holds.
+
+    `profile` is the older name for `profile_id`. A string `phone` counts only
+    when it is an id, not the display name."""
+    devices = _id_set(session, ("device_id",))
+    profiles = _id_set(session, ("profile_id", "profile"))
+    phone = _text_id(session.get("phone"))
+    if phone and phone.lower() not in _PHONE_DISPLAY_NAMES and phone not in devices:
+        profiles.add(phone)
+    return devices, profiles
 
 
 def _session_on_entry(entry, session):
     """True when this live session is that catalog phone.
 
-    An entry with an id matches the session's device id or profile. A
-    temporary entry has no id; a session with no device and no profile, on
-    the same platform, is that throwaway phone."""
-    key = _session_key(session)
-    if entry.get("id"):
-        return key == entry["id"]
-    if not entry.get("temporary") or key is not None or _link_kind(session) == "control":
-        return False
-    platform = entry.get("platform")
-    return not platform or session.get("platform") in (None, platform)
+    Match by device_id or profile_id (a catalog row keeps that id on `id`,
+    `device_id`, or `profile_id`). A temporary row, which names neither, is
+    the session that also names neither. Anything else is not this row."""
+    devices, profiles = _session_ids(session)
+    entry_ids = _id_set(entry, ("id", "device_id", "profile_id"))
+    if (devices | profiles) & entry_ids:
+        return True
+    if entry.get("temporary") and not entry_ids and not devices and not profiles:
+        if _link_kind(session) == "control" or session.get("platform") == "ios":
+            return False
+        platform = entry.get("platform")
+        return not platform or session.get("platform") in (None, platform)
+    return False
 
 
 def _ls_rows(me, sessions):
@@ -1149,7 +1208,7 @@ def _ls_rows(me, sessions):
         rows.append({
             "label": entry.get("label") or "",
             "platform": entry.get("platform"),
-            "id": entry.get("id"),
+            "id": entry.get("id") or entry.get("device_id") or entry.get("profile_id"),
             "state": entry.get("state"),
             "temporary": bool(entry.get("temporary")),
             "session": session_blob(match) if match else None,
@@ -1158,12 +1217,13 @@ def _ls_rows(me, sessions):
     for s in sessions:
         if s.get("id") in used:
             continue
+        named, _profiles = _session_ids(s)
         rows.append({
             "label": s.get("device") or s.get("label") or "session",
             "platform": s.get("platform"),
             "id": None,
             "state": s.get("state"),
-            "temporary": not s.get("profile") and _link_kind(s) != "control",
+            "temporary": not named and not _profiles and _link_kind(s) != "control",
             "session": session_blob(s),
             "targeted": s.get("id") == mine,
             "unmatched": True,

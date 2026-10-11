@@ -219,6 +219,7 @@ class FakeCloud(BaseHTTPRequestHandler):
 class FakeControl(BaseHTTPRequestHandler):
     """What a phone driven by ops over HTTPS answers: /ops, /op, /frame.png."""
     calls = []
+    launch_error = None       # set: apps.launch returns this JSON body with HTTP 400
     PNG = bytes.fromhex("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
                         "0000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082")
 
@@ -256,6 +257,8 @@ class FakeControl(BaseHTTPRequestHandler):
                 return self._send(200, {"result": True})
             if op == "nav.back":
                 return self._send(400, {"error": "iOS has no back", "unsupported": True})
+            if op == "apps.launch" and FakeControl.launch_error:
+                return self._send(400, FakeControl.launch_error)
             return self._send(400, {"error": f"cannot {op}", "unsupported": True})
         return self._send(404, {"error": "not found"})
 
@@ -276,6 +279,7 @@ class CloudCli(unittest.TestCase):
         FakeCloud.control_url = None
         FakeCloud.available = None
         FakeCloud.fail = None
+        FakeControl.launch_error = None
         FakeCloud.profile = {"id": "prof-1", "state": "stored", "session": None,
                              "saved_at": time.time() - 7200}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeCloud)
@@ -285,6 +289,7 @@ class CloudCli(unittest.TestCase):
         self.env = {**os.environ, "PYTHONPATH": SUPPORT + os.pathsep + SRC,
                     "PHONE_HARNESS_HOME": self.home.name,
                     "PHONE_HARNESS_ADB": str(adb), "PHONE_HARNESS_TELEMETRY": "0",
+                    "PHONE_HARNESS_NO_UPDATE_CHECK": "1",
                     "PHONE_HARNESS_CLOUD_API": f"http://127.0.0.1:{self.server.server_port}",
                     "PHONE_HARNESS_CLOUD_OAUTH_ISSUER": f"http://127.0.0.1:{self.server.server_port}",
                     "PHONE_HARNESS_CLOUD_OAUTH_CLIENT_ID": "cli-client"}
@@ -523,6 +528,7 @@ class CloudCli(unittest.TestCase):
         self.assertNotIn("provider", FakeCloud.posts[0])
         self.assertNotIn("profile_id", FakeCloud.posts[0])
         self.assertIn("Starting your iPhone", r.stdout)
+        self.assertIn("your iPhone, My iPhone SE", r.stdout)
         self.assertIn("control", r.stdout)
         self.assertNotIn("adb", r.stdout)
         self.assertFalse((Path(self.home.name) / "adb.log").exists())     # never touched
@@ -809,6 +815,118 @@ class CloudCli(unittest.TestCase):
         self.assertIn("orphan", text.stdout)
         self.assertTrue(any(line.startswith("*") and "sid001" in line
                             for line in text.stdout.splitlines()))
+
+    def test_ls_inlines_a_live_session_on_its_catalog_row(self):
+        """device_id, profile_id, and a temporary session each share their row.
+
+        A live iPhone used to print a second `iPhone ios - ready <sid>` line
+        because the list matches `profile` and a display name, not device_id
+        or profile_id. A session that matches nothing is still its own row,
+        including a control link that names no device."""
+        self.login()
+        FakeCloud.available = [
+            {"platform": "ios", "kind": "device", "device_id": "iph-1", "label": "iPhone",
+             "state": "running"},
+            {"platform": "android", "kind": "emulator", "id": "prof-1", "label": "Saved phone",
+             "state": "running"},
+            {"platform": "android", "kind": "emulator", "temporary": True, "label": "Temporary phone"},
+        ]
+        soon = time.time() + 7 * 60
+        control = {"url": "http://127.0.0.1:1", "token": "ct_1"}
+        FakeCloud.sessions["liveios"] = {
+            "id": "liveios", "state": "ready", "platform": "ios", "kind": "device",
+            "device": "iPhone", "label": "iPhone", "device_id": "iph-1",
+            "profile_id": None, "profile": None, "phone": None,
+            "expires_at": soon, "control": control}
+        FakeCloud.sessions["liveand"] = {
+            "id": "liveand", "state": "ready", "platform": "android", "kind": "emulator",
+            "device": "Android emulator", "profile_id": "prof-1", "profile": None,
+            "device_id": None, "phone": None, "expires_at": soon,
+            "adb": {"host": "live.example", "port": 22220, "code": "ph_code"}}
+        FakeCloud.sessions["livetemp"] = {
+            "id": "livetemp", "state": "ready", "platform": "android", "kind": "emulator",
+            "device": "Android emulator", "profile_id": None, "profile": None,
+            "device_id": None, "phone": None, "expires_at": soon,
+            "adb": {"host": "live.example", "port": 22221, "code": "ph_code"}}
+        FakeCloud.sessions["orphan"] = {
+            "id": "orphan", "state": "ready", "platform": "ios", "kind": "device",
+            "device": "iPhone", "device_id": "iph-other", "profile_id": None,
+            "expires_at": soon, "control": control}
+        FakeCloud.sessions["noid"] = {
+            "id": "noid", "state": "ready", "platform": "ios", "device": "iPhone",
+            "profile_id": None, "profile": None, "device_id": None, "phone": "iPhone",
+            "expires_at": soon, "control": control}
+        raw = self.run_cli("cloud", "ls", "--json")
+        self.assertEqual(raw.returncode, 0, raw.stderr)
+        rows = json.loads(raw.stdout)
+        self.assertEqual([row["session"]["id"] for row in rows],
+                         ["liveios", "liveand", "livetemp", "orphan", "noid"])
+        self.assertEqual(rows[0]["id"], "iph-1")
+        self.assertEqual(rows[0]["label"], "iPhone")
+        self.assertFalse(rows[0].get("unmatched"))
+        self.assertEqual(rows[1]["id"], "prof-1")
+        self.assertTrue(rows[2]["temporary"])
+        self.assertEqual([row["session"]["id"] for row in rows if row.get("unmatched")],
+                         ["orphan", "noid"])
+        text = self.run_cli("cloud", "ls").stdout
+        for sid in ("liveios", "liveand", "livetemp", "orphan", "noid"):
+            self.assertEqual(text.count(sid), 1, text)
+        iphone = next(line for line in text.splitlines() if "liveios" in line)
+        self.assertIn("iPhone", iphone)
+        self.assertIn("iph-1", iphone)
+        self.assertIn("Saved phone", next(line for line in text.splitlines() if "liveand" in line))
+        self.assertIn("Temporary", next(line for line in text.splitlines() if "livetemp" in line))
+
+    def test_start_does_not_repeat_an_iphone_label(self):
+        self.login()
+        FakeCloud.available = [
+            {"platform": "ios", "kind": "device", "id": "iph-1", "label": "iPhone",
+             "state": "available"}]
+        r = self.run_cli("cloud", "start", "iPhone", "--no-watch",
+                         env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("iPhone, iPhone", r.stdout)
+        self.assertRegex(r.stdout, r"Starting your iPhone(?!,)")
+        self.assertRegex(r.stdout, r"\(your iPhone\)")
+
+    def test_shown_expiry_rounds_up_to_the_requested_minutes(self):
+        from phone_harness.cloud import _left
+        self.assertEqual(_left(time.time() + 6 * 60 - 50), "6 min")
+        self.assertEqual(_left(time.time() + 5 * 60), "5 min")
+        self.assertTrue(_left(time.time() + 90).endswith("s"))
+        self.login()
+        r = self.run_cli("cloud", "start", "Temporary phone", "--for", "6", "--no-watch")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(FakeCloud.posts[-1]["timeout_seconds"], 360)
+        self.assertIn("expires  in 6 min", r.stdout)
+
+    def test_a_control_error_prints_its_type_once(self):
+        from phone_harness.remote import _plain_error
+        self.assertEqual(
+            _plain_error("RuntimeError: no installed app matches 'Notes'", RuntimeError),
+            "no installed app matches 'Notes'")
+        self.assertEqual(
+            _plain_error("RuntimeError: RuntimeError: no installed app matches 'Notes'", RuntimeError),
+            "no installed app matches 'Notes'")
+        control = ThreadingHTTPServer(("127.0.0.1", 0), FakeControl)
+        threading.Thread(target=control.serve_forever, daemon=True).start()
+        self.addCleanup(control.server_close)
+        self.addCleanup(control.shutdown)
+        FakeCloud.control_url = f"http://127.0.0.1:{control.server_port}"
+        FakeControl.launch_error = {"error": "RuntimeError: no installed app matches 'Notes'"}
+        self.login()
+        FakeCloud.available = [
+            {"platform": "ios", "kind": "device", "id": "iph-1", "label": "iPhone",
+             "state": "available"}]
+        started = self.run_cli("cloud", "start", "ios", "--no-watch",
+                               env={"PHONE_HARNESS_ADB": "/nonexistent/adb"})
+        self.assertEqual(started.returncode, 0, started.stderr)
+        script = "from phone_harness.helpers import open_app\nopen_app('Notes')\n"
+        r = self.run_cli(stdin=script)
+        self.assertNotEqual(r.returncode, 0)
+        last = [line for line in r.stderr.splitlines() if line.strip()][-1]
+        self.assertEqual(last, "RuntimeError: no installed app matches 'Notes'")
+        self.assertNotIn("RuntimeError: RuntimeError:", r.stderr)
 
     def test_a_session_pin_targets_one_phone_for_commands_and_helpers(self):
         self.login()

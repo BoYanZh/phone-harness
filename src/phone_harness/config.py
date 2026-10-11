@@ -1,6 +1,6 @@
 """Where phone-harness keeps what the user chose and what it learned.
 
-Two kinds of thing, kept apart because they live differently:
+Kept apart because they live differently:
 
   config   intent — the default platform, the adb binary, how often to poke
            a phone awake. Hand-editable, small, worth putting in dotfiles.
@@ -14,9 +14,12 @@ Two kinds of thing, kept apart because they live differently:
              ~/.local/state/phone-harness/cloud.json
              ~/.local/state/phone-harness/telemetry.json
              ~/.local/state/phone-harness/run/awake.pid
+  cache    the once-a-day update check: when it last looked, and the latest
+           version it saw.
+             ~/.cache/phone-harness/update.json
 
-XDG_CONFIG_HOME / XDG_STATE_HOME are honoured; PHONE_HARNESS_HOME moves both
-roots under one directory (tests, sandboxes).
+XDG_CONFIG_HOME / XDG_STATE_HOME / XDG_CACHE_HOME are honoured;
+PHONE_HARNESS_HOME moves all three roots under one directory (tests, sandboxes).
 
 One rule for every setting: explicit argument, else environment variable,
 else config file, else built-in default. A `.env` file at the repo root or
@@ -106,6 +109,14 @@ def state_dir():
     return Path(base) / "phone-harness"
 
 
+def cache_dir():
+    home = os.environ.get("PHONE_HARNESS_HOME")
+    if home:
+        return Path(home) / "cache"
+    base = os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache"
+    return Path(base) / "phone-harness"
+
+
 def run_dir():
     return state_dir() / "run"
 
@@ -116,6 +127,7 @@ def paths():
             "devices": state_dir() / "devices.json",
             "cloud": state_dir() / "cloud.json",
             "telemetry": state_dir() / "telemetry.json",
+            "update": cache_dir() / "update.json",
             "run": run_dir()}
 
 

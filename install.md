@@ -34,7 +34,12 @@ phone-harness skill > "${CODEX_HOME:-$HOME/.codex}/skills/phone-harness/SKILL.md
   `--doctor android` checks the other.
 
 Re-run the `phone-harness skill > …/SKILL.md` lines after pulling updates so
-the agent's copy matches the code.
+the agent's copy matches the code. `phone-harness update` does the upgrade:
+`uv tool upgrade phone-harness` when this is a uv tool, `git pull --ff-only`
+in a checkout, otherwise it prints `pip install -U phone-harness` and does
+not run it. It never updates on its own. A newer PyPI release is one stderr
+line, at most once a day, and only on a terminal;
+`PHONE_HARNESS_NO_UPDATE_CHECK=1` skips the check.
 - **No phone on your desk?** `phone-harness cloud login`, then
   `phone-harness cloud ls` and `phone-harness cloud start` (the account
   default) or `phone-harness cloud start PHONE` for a catalog id, label, or

@@ -23,6 +23,16 @@ TMP = Path(tempfile.gettempdir()) / "phone-harness"
 USER_AGENT = "phone-harness-cli"
 
 
+def _plain_error(message, exc_type):
+    """Drop a leading `TypeName:` that repeats the exception about to be raised."""
+    if not isinstance(message, str):
+        message = str(message)
+    prefix = exc_type.__name__ + ": "
+    while message.startswith(prefix):
+        message = message[len(prefix):]
+    return message or exc_type.__name__
+
+
 class Remote(Backend):
     name = "remote"
 
@@ -50,11 +60,14 @@ class Remote(Backend):
                 err = {}
             message = err.get("error") or f"the cloud phone answered {e.code}"
             if err.get("unsupported"):
-                raise Unsupported(message) from None
+                raise Unsupported(_plain_error(message, Unsupported)) from None
             if e.code == 404:
                 raise RuntimeError("the cloud phone session is gone or its grant expired; "
                                    "`phone-harness cloud` shows whether it is still running") from None
-            raise RuntimeError(message) from None
+            # The host's `error` already includes its exception type
+            # ("RuntimeError: no installed app matches 'Notes'"). Raising
+            # RuntimeError(message) would print that type twice.
+            raise RuntimeError(_plain_error(message, RuntimeError)) from None
         except urllib.error.URLError as e:
             raise RuntimeError(f"could not reach the cloud phone: {e.reason}") from None
 

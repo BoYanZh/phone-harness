@@ -72,7 +72,9 @@ phone-harness cloud stop             # billing stops; a saved Android is written
 ```
 
 `cloud ls` is the catalog (`GET /me` → `available`): each phone's label,
-platform, and id, with a live session on that row. `cloud start` with no name
+platform, and id, with a live session on that row (matched by device id,
+profile id, or the temporary row). A session that matches nothing is its own
+row. `cloud start` with no name
 starts this machine's `cloud.phone` setting if one is set, else what the
 service gives an unnamed start, a temporary Android. A name is a catalog id or label, or `ios` /
 `android` when only one entry has that platform. A [cloud Android](https://phone-harness.com/cloud)
@@ -81,6 +83,15 @@ no shell: the helpers POST ops over HTTPS, OCR runs on the host, and driving
 it is in [SKILL.md](SKILL.md). `phone-harness cloud` lists the rest, including
 `watch`, `open`, `history`, and `phone` for the saved Android. `--session SID`
 (or `PHONE_HARNESS_SESSION`) pins one rented phone for this process.
+
+## Updates
+
+`phone-harness update` upgrades a [uv](https://docs.astral.sh/uv/) tool
+(`uv tool upgrade phone-harness`) or a git checkout (`git pull --ff-only`).
+Any other install prints `pip install -U phone-harness` and leaves it for
+you to run. The tool never updates itself. On a terminal, once a day, it
+prints one line on stderr when PyPI has a newer version. Set
+`PHONE_HARNESS_NO_UPDATE_CHECK=1` to silence that notice.
 
 ## How it works
 

@@ -108,8 +108,10 @@ There are two things. A **phone** is a row in the account catalog (`GET /me`
 -> `available`): a label, a platform, an id, and whether it is a temporary
 phone. The service keeps no default phone; a preference is the chooser's. A **session** is one of those phones rented right now.
 `cloud ls` prints one row per catalog phone and writes any live session on
-that row (`*` is the session this process targets). A running session that
-matches no row is still listed.
+that row (`*` is the session this process targets). A session lines up with
+the row that has the same device_id or profile_id; a session with neither
+lines up with the temporary row. A running session that matches no row is
+still listed on its own.
 
 `cloud start` with no name starts this machine's `cloud.phone` setting
 (`config set cloud.phone "Desk phone"`) when one is set; otherwise it sends
@@ -396,3 +398,18 @@ events into it for hands. All coordinates are global macOS screen points.
 
 For task-specific edits, use `agent-workspace/agent_helpers.py`. For setup or
 permission problems, read `install.md`.
+
+## Updates
+
+`phone-harness update` brings this install up to date. A uv tool runs
+`uv tool upgrade phone-harness`. A git checkout runs `git pull --ff-only`
+in that checkout. Anything else prints `pip install -U phone-harness` and
+does not run it. The CLI never updates itself. Once a day, on a terminal,
+it may print one stderr line when PyPI has a newer version:
+
+```
+phone-harness X.Y.Z is available (you have A.B.C): run phone-harness update
+```
+
+Relay that line to the user. `PHONE_HARNESS_NO_UPDATE_CHECK=1` turns the
+notice off. A network problem never fails the command.
