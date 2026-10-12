@@ -11,6 +11,7 @@ and what register() hands Hermes.
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -20,6 +21,9 @@ from typing import Any
 
 PLUGIN_INIT = Path(__file__).resolve().parents[1] / "integrations" / "hermes" / "__init__.py"
 REPO_SKILL = Path(__file__).resolve().parents[1] / "SKILL.md"
+SRC = Path(__file__).resolve().parents[1] / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
 
 def load_plugin() -> Any:
@@ -132,14 +136,15 @@ class Environment(Base):
         self.assertEqual(env["PHONE_HARNESS_PLATFORM"], "ios")
         self.assertEqual(env["PHONE_HARNESS_TELEMETRY"], "1")
 
-    def test_the_plugin_does_not_invent_platform_or_telemetry(self):
+    def test_the_plugin_does_not_invent_a_platform(self):
         saved = dict(os.environ)
         self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
         os.environ.pop("PHONE_HARNESS_PLATFORM", None)
         os.environ.pop("PHONE_HARNESS_TELEMETRY", None)
+        os.environ["PHONE_HARNESS_HOME"] = str(self.data)
         env = self.plugin._env(self.data / "ws")
         self.assertNotIn("PHONE_HARNESS_PLATFORM", env)
-        self.assertNotIn("PHONE_HARNESS_TELEMETRY", env)
+        self.assertEqual(env["PHONE_HARNESS_TELEMETRY"], "0")
 
 
 class Workspace(unittest.TestCase):
@@ -264,6 +269,84 @@ class WorkspaceSeed(unittest.TestCase):
         self.assertTrue(again["success"], again)
         self.assertEqual(helper.read_text(), "# keep\n")
         self.assertEqual((data / "agent-workspace" / "notes.txt").read_text(), "mine\n")
+
+
+class TelemetryOptIn(Base):
+    """Hermes runs are opt-in. The CLI default stays on when the setting was never stored."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved = dict(os.environ)
+        os.environ["PHONE_HARNESS_HOME"] = str(self.data)
+        os.environ.pop("PHONE_HARNESS_TELEMETRY", None)
+        self.addCleanup(self.restore_env)
+
+    def restore_env(self):
+        os.environ.clear()
+        os.environ.update(self.saved)
+
+    def child_enabled(self) -> bool:
+        env = self.plugin._env(self.data / "ws")
+        env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "from phone_harness.telemetry import is_enabled\n"
+             "print('1' if is_enabled() else '0')"],
+            capture_output=True, text=True, env=env,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc.stdout.strip() == "1"
+
+    def test_unset_is_off_under_hermes_and_the_cli_default_stays_on(self):
+        from phone_harness.config import get, lookup
+        from phone_harness.telemetry import is_enabled
+
+        self.assertEqual(lookup("telemetry"), (True, "default"))
+        self.assertTrue(get("telemetry"))
+        self.assertTrue(is_enabled())
+        env = self.plugin._env(self.data / "ws")
+        self.assertEqual(env["PHONE_HARNESS_TELEMETRY"], "0")
+        self.assertNotIn("PHONE_HARNESS_TELEMETRY", os.environ)
+        self.assertTrue(is_enabled())
+        self.assertFalse(self.child_enabled())
+
+    def test_an_explicit_stored_true_is_on(self):
+        from phone_harness.config import set as set_config
+
+        set_config("telemetry", "true")
+        env = self.plugin._env(self.data / "ws")
+        self.assertNotIn("PHONE_HARNESS_TELEMETRY", env)
+        self.assertTrue(self.child_enabled())
+
+    def test_an_explicit_stored_false_is_off(self):
+        from phone_harness.config import set as set_config
+        from phone_harness.telemetry import is_enabled
+
+        set_config("telemetry", "false")
+        self.assertFalse(is_enabled())
+        env = self.plugin._env(self.data / "ws")
+        self.assertEqual(env["PHONE_HARNESS_TELEMETRY"], "0")
+        self.assertFalse(self.child_enabled())
+
+    def test_an_enabling_env_var_is_on(self):
+        os.environ["PHONE_HARNESS_TELEMETRY"] = "true"
+        env = self.plugin._env(self.data / "ws")
+        self.assertEqual(env["PHONE_HARNESS_TELEMETRY"], "true")
+        self.assertTrue(self.child_enabled())
+
+    def test_a_disabling_env_var_is_off(self):
+        os.environ["PHONE_HARNESS_TELEMETRY"] = "0"
+        env = self.plugin._env(self.data / "ws")
+        self.assertEqual(env["PHONE_HARNESS_TELEMETRY"], "0")
+        self.assertFalse(self.child_enabled())
+
+    def test_the_plugin_reads_the_same_config_file_as_the_cli(self):
+        from phone_harness.config import paths
+
+        self.assertEqual(self.plugin._config_json(), paths()["config"])
+        os.environ.pop("PHONE_HARNESS_HOME", None)
+        os.environ["XDG_CONFIG_HOME"] = str(self.data / "xdg")
+        self.assertEqual(self.plugin._config_json(), paths()["config"])
 
 
 class Running(Base):

@@ -11,4 +11,4 @@ provides_tools:
 provides_hooks:
   - pre_tool_call
 python_dependencies:
-  - "phone-harness>=0.3.1rc1,<0.4"
+  - "phone-harness>=0.3.1,<0.4"

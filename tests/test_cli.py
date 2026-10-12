@@ -436,6 +436,26 @@ class TopLevel(unittest.TestCase):
         skill.encode("ascii")
 
 
+class TelemetryDefault(unittest.TestCase):
+    def test_cli_telemetry_stays_on_when_the_setting_was_never_set(self):
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        from phone_harness.config import cli, get, lookup
+        from phone_harness.telemetry import is_enabled
+
+        with mock.patch.dict(os.environ, {"PHONE_HARNESS_HOME": home.name}, clear=False):
+            os.environ.pop("PHONE_HARNESS_TELEMETRY", None)
+            self.assertEqual(lookup("telemetry"), (True, "default"))
+            self.assertTrue(get("telemetry"))
+            self.assertTrue(is_enabled())
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(cli([]), 0)
+            line = next(item for item in out.getvalue().splitlines() if item.startswith("telemetry"))
+            self.assertIn("true", line)
+            self.assertIn("(default)", line)
+
+
 class SessionAndStdinGuard(unittest.TestCase):
     """The top-level script path and --session live in run.py; argparse must not take them over."""
 

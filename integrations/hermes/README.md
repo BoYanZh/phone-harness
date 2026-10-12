@@ -44,7 +44,7 @@ covers each.
 
 This plugin has no settings of its own.
 
-- Telemetry follows phone-harness's own config.
+- Telemetry is off for Hermes runs unless you opt in with `phone-harness config set telemetry true`.
 - `PHONE_HARNESS_PLATFORM`, when you have exported it, is passed through.
 - The agent workspace is one folder, `agent-workspace`, in Hermes's plugin
   data directory. If `PH_AGENT_WORKSPACE` is already set, that path is used
@@ -61,8 +61,8 @@ This plugin has no settings of its own.
 3. Subagents in this process take turns on the phone, via an in-process lock.
    After 120 s the tool reports the phone as busy.
 4. The plugin pipes the script on stdin to the phone-harness Hermes installed,
-   with `PH_AGENT_WORKSPACE` and `PH_CLIENT=hermes`. It does not set a platform
-   and does not turn telemetry off.
+   with `PH_AGENT_WORKSPACE` and `PH_CLIENT=hermes`. It does not set a platform.
+   Telemetry is off for Hermes runs unless you opt in with `phone-harness config set telemetry true`.
 5. The result is what the script printed, plus the exit code, the tail of
    stderr, and any screenshot paths it printed (the agent opens those with
    `vision_analyze`). A script past its timeout is killed with everything it

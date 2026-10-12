@@ -179,12 +179,60 @@ def _seed_workspace(workspace: Path) -> None:
         workspace.mkdir(parents=True, exist_ok=True)
 
 
+# Same enabling spellings as phone_harness.config's bool env override.
+_TRUTHY = ("1", "true", "yes", "on")
+
+
+def _truthy(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in _TRUTHY
+    return bool(value)
+
+
+def _config_json() -> Path:
+    """config.json, using the same directory rules as phone_harness.config.config_dir.
+
+    Inlined on purpose: importing phone_harness.config loads .env files and can seed an
+    agent workspace in this process. Hermes only needs the stored telemetry flag.
+    """
+    home = os.environ.get("PHONE_HARNESS_HOME")
+    if home:
+        root = Path(home) / "config"
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
+        root = Path(base) / "phone-harness"
+    return root / "config.json"
+
+
+def _telemetry_opted_in() -> bool:
+    """True only for an explicit opt-in.
+
+    Opt-in is ``phone-harness config set telemetry true`` (a value stored in config.json)
+    or PHONE_HARNESS_TELEMETRY set to an enabling value. The built-in default is on for
+    the CLI and is not an opt-in. An explicit false stays off.
+    """
+    raw = os.environ.get("PHONE_HARNESS_TELEMETRY")
+    if raw is not None:
+        return _truthy(raw)
+    try:
+        data = json.loads(_config_json().read_text())
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or "telemetry" not in data:
+        return False
+    return _truthy(data["telemetry"])
+
+
 def _env(workspace: Path) -> dict:
-    """The script inherits Hermes's environment. Platform and telemetry stay phone-harness's own
-    config: an exported PHONE_HARNESS_PLATFORM is left as it is, and this plugin does not set one."""
+    """The script inherits Hermes's environment. An exported PHONE_HARNESS_PLATFORM is left
+    as it is. Telemetry is off unless the user explicitly opted in."""
     env = dict(os.environ)
     env["PH_AGENT_WORKSPACE"] = str(workspace)
     env["PH_CLIENT"] = "hermes"
+    if not _telemetry_opted_in():
+        env["PHONE_HARNESS_TELEMETRY"] = "0"
     return env
 
 # ---------------------------------------------------------------------------------------------
