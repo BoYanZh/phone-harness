@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import types
 import unittest
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ class FakeCtx:
 
     def __init__(self):
         self.tools, self.hooks, self.skills = {}, {}, {}
+        self.settings = {}
 
     def register_tool(self, name, toolset, schema, handler, **kw):
         self.tools[name] = dict(toolset=toolset, schema=schema, handler=handler, **kw)
@@ -48,6 +50,9 @@ class FakeCtx:
 
     def register_skill(self, name, path, description="", frontmatter=None):
         self.skills[name] = {"path": path, "description": description, "frontmatter": dict(frontmatter or {})}
+
+    def get_config(self, key, default=None):
+        return self.settings.get(key, default)
 
 
 class Base(unittest.TestCase):
@@ -63,6 +68,27 @@ class Base(unittest.TestCase):
         self.plugin._packaged_skill = lambda: None
         self.ctx = FakeCtx()
         self.plugin.register(self.ctx)
+        # The suffix scrub, not a Hermes install that may or may not be on this machine.
+        self._saved_modules = {name: sys.modules.get(name) for name in
+                               ("tools", "tools.environments", "tools.environments.local")}
+        tools = types.ModuleType("tools")
+        tools.__path__ = []
+        environments = types.ModuleType("tools.environments")
+        environments.__path__ = []
+        local = types.ModuleType("tools.environments.local")
+        tools.environments = environments
+        environments.local = local
+        sys.modules["tools"] = tools
+        sys.modules["tools.environments"] = environments
+        sys.modules["tools.environments.local"] = local
+        self.addCleanup(self._restore_modules)
+
+    def _restore_modules(self):
+        for name, module in self._saved_modules.items():
+            if module is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = module
 
     def run_tool(self, code, **args):
         return json.loads(self.plugin.phone_exec({"code": code, **args}))
@@ -88,33 +114,90 @@ class Registration(Base):
 class ApprovalGate(Base):
     PHONE_ONLY = [
         'ensure_device()\nprint([o["text"] for o in screen()][:10])',
-        'import json, re, time\nprint(json.dumps(screen_info()))',
+        'from phone_harness.helpers import screen\nprint(screen())',
         'from phone_harness import helpers\nhelpers.tap_text("Weather")',
-        'from collections import Counter\nprint(Counter(o["text"] for o in ocr()))',
-        'def (',  # a SyntaxError cannot run, so there is nothing to approve
+        'import phone_harness.helpers as helpers\nprint(helpers.screen_info())',
+        'send("screen.text")',
+        'send("input.tap", x=1, y=2)',
+        'send("input.text", s="raw")',
+        's = send\ns("screen.capture")',
+        'def (',  # a SyntaxError cannot run, so the classifier has nothing to approve
     ]
     PAST_THE_PHONE = [
-        "import os", "import subprocess", "import os.path", "from os import path", "import Quartz",
-        "from . import agent_helpers", 'open("notes.txt", "w").write("x")', '__import__("os")',
-        'eval("1")', "print.__self__", 'getattr(print, "__self__")', 'shell("pm list packages")',
+        "import os", "import json", "import subprocess", "import os.path", "from os import path",
+        "from collections import Counter",
+        "import Quartz", "import phone_harness", "import phone_harness.transport",
+        "from phone_harness import transport", "from phone_harness.helpers import Path",
+        "from phone_harness.helpers import importlib", "from . import agent_helpers",
+        'open("notes.txt", "w").write("x")', '__import__("os")', 'eval("1")',
+        "print.__self__", 'getattr(print, "__self__")', 'shell("pm list packages")',
+        'send("raw", cmd="id")', 'send(op="raw")', 'op = "raw"\nsend(op)',
+        'f = open\nf("/etc/passwd")', 's = send\ns("raw", cmd="id")',
+        'phone.send("raw", cmd="id")',
+        'from phone_harness.helpers import shell as sh\nsh("id")',
+        'a = open\nb = a\nb("x")',
+        'import phone_harness.helpers as helpers\nprint(helpers.Path.home())',
     ]
+
+    def setUp(self):
+        super().setUp()
+        self._saved_auto = os.environ.pop(self.plugin.CLASSIFIER_AUTO_RUN_ENV, None)
+        self.addCleanup(self._restore_auto)
+
+    def _restore_auto(self):
+        if self._saved_auto is None:
+            os.environ.pop(self.plugin.CLASSIFIER_AUTO_RUN_ENV, None)
+        else:
+            os.environ[self.plugin.CLASSIFIER_AUTO_RUN_ENV] = self._saved_auto
 
     def hook(self, code, tool="phone_exec"):
         return self.ctx.hooks["pre_tool_call"](tool_name=tool, args={"code": code}, task_id="t")
 
-    def test_phone_scripts_run_without_asking(self):
+    def test_every_phone_exec_asks_by_default(self):
+        for code in self.PHONE_ONLY + self.PAST_THE_PHONE:
+            with self.subTest(code=code):
+                directive = self.hook(code)
+                self.assertEqual(directive["action"], "approve")
+                self.assertEqual(directive["rule_key"], "phone_exec")
+                self.assertIn("phone_exec", directive["message"])
+                self.assertLessEqual(len(directive["message"]), 180)
+
+    def test_the_default_message_describes_the_script(self):
+        directive = self.hook('ensure_device()\nprint(screen())')
+        self.assertIn("ensure_device()", directive["message"])
+        self.assertIn("print(screen())", directive["message"])
+
+    def test_phone_only_scripts_are_quiet_only_after_opt_in(self):
+        os.environ[self.plugin.CLASSIFIER_AUTO_RUN_ENV] = "1"
         for code in self.PHONE_ONLY:
             with self.subTest(code=code):
                 self.assertIsNone(self.plugin.approval_reason(code))
                 self.assertIsNone(self.hook(code))
 
-    def test_scripts_that_reach_past_the_phone_ask_first(self):
+    def test_opt_in_still_asks_for_scripts_that_reach_past_the_phone(self):
+        os.environ[self.plugin.CLASSIFIER_AUTO_RUN_ENV] = "1"
         for code in self.PAST_THE_PHONE:
             with self.subTest(code=code):
-                self.assertIsNotNone(self.plugin.approval_reason(code))
+                self.assertIsNotNone(self.plugin.approval_reason(code), code)
                 directive = self.hook(code)
                 self.assertEqual(directive["action"], "approve")
+                self.assertEqual(directive["rule_key"], "phone_exec")
                 self.assertIn("phone_exec", directive["message"])
+                self.assertIn("heuristic", directive["message"])
+
+    def test_the_plugin_setting_opts_into_auto_run_when_the_env_var_is_unset(self):
+        self.ctx.settings[self.plugin.CLASSIFIER_AUTO_RUN] = True
+        self.assertIsNone(self.hook("print(screen())"))
+        asked = self.hook('send("raw", cmd="id")')
+        self.assertEqual(asked["rule_key"], "phone_exec")
+        self.assertEqual(asked["action"], "approve")
+
+    def test_an_explicit_env_var_off_beats_the_plugin_setting(self):
+        self.ctx.settings[self.plugin.CLASSIFIER_AUTO_RUN] = True
+        os.environ[self.plugin.CLASSIFIER_AUTO_RUN_ENV] = "0"
+        directive = self.hook("print(screen())")
+        self.assertEqual(directive["action"], "approve")
+        self.assertEqual(directive["rule_key"], "phone_exec")
 
     def test_other_tools_are_left_alone(self):
         self.assertIsNone(self.hook("import os", tool="terminal"))
@@ -145,6 +228,64 @@ class Environment(Base):
         env = self.plugin._env(self.data / "ws")
         self.assertNotIn("PHONE_HARNESS_PLATFORM", env)
         self.assertEqual(env["PHONE_HARNESS_TELEMETRY"], "0")
+
+    def test_secret_suffixes_are_removed_and_phone_harness_vars_stay(self):
+        saved = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
+        os.environ["OPENAI_API_KEY"] = "sk-test"
+        os.environ["GH_TOKEN"] = "ghp-test"
+        os.environ["DB_SECRET"] = "s3cret"
+        os.environ["openai_api_key"] = "sk-lower"
+        os.environ["PHONE_HARNESS_PLATFORM"] = "android"
+        os.environ["PHONE_HARNESS_CUSTOM"] = "kept"
+        os.environ["PHONE_HARNESS_API_KEY"] = "ph-key"
+        os.environ["PATH"] = "/usr/bin:/bin"
+        os.environ["HOME"] = "/home/me"
+        os.environ["ANDROID_HOME"] = "/opt/android"
+        os.environ["ANDROID_SERIAL"] = "emulator-5554"
+        env = self.plugin._env(self.data / "ws")
+        for gone in ("OPENAI_API_KEY", "GH_TOKEN", "DB_SECRET", "openai_api_key"):
+            self.assertNotIn(gone, env)
+        self.assertEqual(env["PHONE_HARNESS_PLATFORM"], "android")
+        self.assertEqual(env["PHONE_HARNESS_CUSTOM"], "kept")
+        self.assertEqual(env["PHONE_HARNESS_API_KEY"], "ph-key")
+        self.assertEqual(env["PATH"], "/usr/bin:/bin")
+        self.assertEqual(env["HOME"], "/home/me")
+        self.assertEqual(env["ANDROID_HOME"], "/opt/android")
+        self.assertEqual(env["ANDROID_SERIAL"], "emulator-5554")
+        self.assertEqual(env["PH_CLIENT"], "hermes")
+        self.assertEqual(env["PH_AGENT_WORKSPACE"], str(self.data / "ws"))
+
+    def test_hermes_subprocess_env_is_used_when_it_imports(self):
+        saved = dict(os.environ)
+        self.addCleanup(lambda: (os.environ.clear(), os.environ.update(saved)))
+        os.environ["OPENAI_API_KEY"] = "sk-test"
+        os.environ["PHONE_HARNESS_PLATFORM"] = "ios"
+        os.environ["PHONE_HARNESS_CUSTOM"] = "kept"
+        os.environ["PHONE_HARNESS_API_KEY"] = "ph-key"
+        os.environ.pop("PHONE_HARNESS_TELEMETRY", None)
+        os.environ["PHONE_HARNESS_HOME"] = str(self.data)
+
+        def hermes_subprocess_env():
+            return {"PATH": "/from-hermes", "HOME": "/home/hermes", "ANDROID_SERIAL": "emulator-5554",
+                    "LANG": "C"}
+
+        sys.modules["tools.environments.local"].hermes_subprocess_env = hermes_subprocess_env
+        env = self.plugin._env(self.data / "ws")
+        self.assertEqual(env["PATH"], "/from-hermes")
+        self.assertEqual(env["HOME"], "/home/hermes")
+        self.assertEqual(env["ANDROID_SERIAL"], "emulator-5554")
+        self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertEqual(env["PHONE_HARNESS_PLATFORM"], "ios")
+        self.assertEqual(env["PHONE_HARNESS_CUSTOM"], "kept")
+        self.assertEqual(env["PHONE_HARNESS_API_KEY"], "ph-key")
+        self.assertEqual(env["PH_CLIENT"], "hermes")
+        self.assertEqual(env["PHONE_HARNESS_TELEMETRY"], "0")
+
+    def test_a_bad_hermes_subprocess_env_fails_loudly(self):
+        sys.modules["tools.environments.local"].hermes_subprocess_env = lambda: ["not", "a", "dict"]
+        with self.assertRaises(TypeError):
+            self.plugin._env(self.data / "ws")
 
 
 class Workspace(unittest.TestCase):
@@ -404,3 +545,23 @@ class Running(Base):
         self.assertFalse(busy["success"])
         self.assertIn("busy", busy["error"])
         self.assertTrue(self.run_tool("print('after')")["success"])   # the lock was released
+
+
+class PluginManifest(unittest.TestCase):
+    def test_the_package_pin_is_exact_and_the_plugin_version_stays(self):
+        text = (PLUGIN_INIT.parent / "plugin.yaml").read_text(encoding="utf-8")
+        self.assertIn("\nversion: 0.1.0\n", text)
+        self.assertIn("phone-harness==0.3.1", text)
+        self.assertNotIn(">=", text)
+        self.assertIn("classifier_auto_run:", text)
+        self.assertIn("heuristic", text)
+        self.assertIn("bypass", text)
+
+    def test_the_readme_says_every_run_asks_and_describes_the_opt_in(self):
+        text = (PLUGIN_INIT.parent / "README.md").read_text(encoding="utf-8")
+        self.assertIn("Every `phone_exec` call asks", text)
+        self.assertIn("classifier_auto_run", text)
+        self.assertIn("PHONE_HARNESS_CLASSIFIER_AUTO_RUN", text)
+        self.assertIn("heuristic", text)
+        self.assertIn("bypassed", text)
+        self.assertNotIn("never ask", text)

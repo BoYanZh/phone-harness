@@ -184,6 +184,33 @@ class HelpAndFlags(unittest.TestCase):
         self.assertIn("42", got.stdout)
         self.assertNotIn("unrecognized arguments", got.stderr)
 
+    def test_hermes_scripts_do_not_receive_host_modules_or_path(self):
+        home = Path("/tmp") / "ph-hermes-globals"
+        script = (
+            "names = set(globals())\n"
+            "for key in ('Path', 'importlib', 'transport', 'hashlib', 'time',\n"
+            "            'AGENT_WORKSPACE', 'CORE_DIR', 'screen', 'send', 'Unsupported'):\n"
+            "    print(key, key in names)\n"
+        )
+        common = {
+            "PHONE_HARNESS_HOME": str(home),
+            "PH_AGENT_WORKSPACE": str(home / "ws"),
+            "PHONE_HARNESS_PLATFORM": "android",
+        }
+        hermes = _run(stdin=script, env={**common, "PH_CLIENT": "hermes"})
+        self.assertEqual(hermes.returncode, 0, hermes.stderr)
+        got = dict(line.split() for line in hermes.stdout.splitlines() if line.strip())
+        for key in ("Path", "importlib", "transport", "hashlib", "time", "AGENT_WORKSPACE", "CORE_DIR"):
+            self.assertEqual(got[key], "False", key)
+        for key in ("screen", "send", "Unsupported"):
+            self.assertEqual(got[key], "True", key)
+
+        plain = _run(stdin=script, env={**common, "PH_CLIENT": ""})
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        plain_got = dict(line.split() for line in plain.stdout.splitlines() if line.strip())
+        for key in ("Path", "importlib", "transport", "AGENT_WORKSPACE"):
+            self.assertEqual(plain_got[key], "True", key)
+
 
 class _stderr:
     """Patch sys.stderr for one cloud.cli call."""

@@ -42,8 +42,14 @@ covers each.
 
 ## Settings
 
-This plugin has no settings of its own.
-
+- Every `phone_exec` call asks before it runs. See [Approvals](#approvals).
+- Classifier auto-run is off unless you opt in. With it on, a script the
+  classifier judges to be phone-only skips the prompt. The classifier is a
+  heuristic and can be bypassed, so a script may still reach this computer.
+  Leave it off unless you accept that.
+  - Plugin setting `classifier_auto_run` (boolean, default false).
+  - Or export `PHONE_HARNESS_CLASSIFIER_AUTO_RUN=1` in the environment Hermes
+    runs in. When that variable is set, it wins over the plugin setting.
 - Telemetry is off for Hermes runs unless you opt in with `phone-harness config set telemetry true`.
 - `PHONE_HARNESS_PLATFORM`, when you have exported it, is passed through.
 - The agent workspace is one folder, `agent-workspace`, in Hermes's plugin
@@ -55,9 +61,10 @@ This plugin has no settings of its own.
 ## How it works
 
 1. The model calls `phone_exec(code, timeout_s=300)`.
-2. A `pre_tool_call` hook reads the script. Phone helpers and plain data
-   handling go straight through. A script that reaches past the phone goes to
-   Hermes's approval prompt first (see below).
+2. A `pre_tool_call` hook asks you to approve every script before it runs.
+   Hermes shows a short description of the script. One answer for the session,
+   or always, covers later calls. With classifier auto-run opted in, a script
+   that only drives the phone runs without asking, and anything else still asks.
 3. Subagents in this process take turns on the phone, via an in-process lock.
    After 120 s the tool reports the phone as busy.
 4. The plugin pipes the script on stdin to the phone-harness Hermes installed,
@@ -70,19 +77,21 @@ This plugin has no settings of its own.
 
 ## Approvals
 
-phone-harness scripts are Python, so they can do anything Python can on this
-computer. The hook sends a script to Hermes's approval prompt when it:
+Every `phone_exec` call asks you before it runs. Hermes shows a short
+description of the script. Allow it once, for the session, or always; one
+session or always answer covers later calls. If nobody can answer (a scheduled
+job, or a chat with no one there), the script does not run.
 
-- imports anything beyond `phone_harness` and a small set of data modules
-  (`json`, `re`, `time`, `math`, `datetime`, `collections`, ...);
-- calls `open`, `exec`, `eval`, `compile`, `__import__`, `breakpoint` or `input`;
-- touches dunder names (`__builtins__`, `__globals__`, `"__self__"`, ...);
-- runs an adb `shell()` command on the phone.
+Classifier auto-run is off unless you opt in (see [Settings](#settings)). With
+it on, scripts that only use the phone helpers run immediately. The check is a
+heuristic and can be bypassed: a script can still reach this computer. Leave
+it off unless you accept that.
 
-Denial, timeout or no one to ask (cron, the messaging gateway) fails closed.
-This is a heuristic gate, not a sandbox. Taps, typing and app launches never
-ask: what to do on the phone is the skill's consent rule, which tells the agent
-to ask before sending, posting, buying, deleting or changing settings.
+While auto-run is on, a script still asks when it imports anything other than
+the phone helpers, reads or writes files, runs or evaluates code, uses Python
+internals, runs an adb shell command, or calls `send("raw", ...)`. What to do
+on the phone itself — sending, posting, buying, deleting, changing settings —
+is still the skill's consent rule: the agent asks you before those.
 
 ## What it touches
 

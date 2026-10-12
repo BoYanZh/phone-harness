@@ -5,6 +5,7 @@ import io
 import os
 import sys
 import time
+import types
 from pathlib import Path
 
 from . import telemetry
@@ -364,6 +365,45 @@ def _dispatch_owned(name, rest):
     sys.exit(cli(rest))
 
 
+def _host_reaching(value):
+    """Module and class objects a Hermes script must not receive already imported.
+
+    helpers.py imports importlib, Path, the transport module and other host
+    objects, and the script globals are a copy of that module. Under
+    PH_CLIENT=hermes those are left out, so ``importlib.import_module("os")``
+    and ``Path.home()`` are not sitting in the script. Path instances are left
+    out too: ``Path.home`` works on them, and ``read_text`` reads this computer.
+    Unsupported stays. It is the phone error scripts catch, not a way off the phone.
+    """
+    if isinstance(value, types.ModuleType):
+        return True
+    if isinstance(value, type):
+        return not (value.__module__ == "phone_harness.transport" and value.__name__ == "Unsupported")
+    if isinstance(value, Path):
+        return True
+    return False
+
+
+def _bind_globals(namespace):
+    hermes = os.environ.get("PH_CLIENT") == "hermes"
+    g = {}
+    for k, v in namespace.items():
+        if k.startswith("_"):
+            continue
+        if hermes and _host_reaching(v):
+            continue
+        if callable(v) and not isinstance(v, type) and not getattr(v, "__ph_traced__", False):
+            v = _traced(k, v)
+        g[k] = v
+    g["__name__"] = "__main__"
+    return g
+
+
+def _script_globals():
+    from . import helpers
+    return _bind_globals(vars(helpers))
+
+
 def _exec_script():
     global _phone_name
     code = sys.stdin.read()
@@ -371,15 +411,7 @@ def _exec_script():
         sys.exit(USAGE)
     from . import helpers
     _phone_name = getattr(helpers.phone, "name", None)
-    g = {}
-    for k, v in vars(helpers).items():
-        if k.startswith("_"):
-            continue
-        if callable(v) and not isinstance(v, type) and not getattr(v, "__ph_traced__", False):
-            v = _traced(k, v)
-        g[k] = v
-    g["__name__"] = "__main__"
-    exec(code, g)
+    exec(code, _script_globals())
 
 
 def _run(args):

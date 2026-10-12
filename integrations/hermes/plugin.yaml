@@ -11,4 +11,14 @@ provides_tools:
 provides_hooks:
   - pre_tool_call
 python_dependencies:
-  - "phone-harness>=0.3.1,<0.4"
+  - "phone-harness==0.3.1"
+config_schema:
+  classifier_auto_run:
+    type: bool
+    default: false
+    description: >-
+      Skip the approval prompt for scripts a classifier judges to be phone-only.
+      The classifier is a heuristic and can be bypassed, so a script may still
+      reach this computer. Leave this off unless you accept that. Off by default,
+      every phone_exec call asks, and one session or always answer covers later
+      calls in the session.

@@ -12,6 +12,7 @@ Unsupported here, exactly as a local backend would.
 """
 import base64
 import json
+import os
 import tempfile
 import urllib.error
 import urllib.request
@@ -19,7 +20,6 @@ from pathlib import Path
 
 from .transport import Backend, Unsupported
 
-TMP = Path(tempfile.gettempdir()) / "phone-harness"
 USER_AGENT = "phone-harness-cli"
 
 
@@ -152,8 +152,10 @@ class Remote(Backend):
 
     def _screen_capture(self, path=None):
         r = self._op("screen.capture", timeout=60)
-        TMP.mkdir(exist_ok=True)
-        path = Path(path or TMP / "remote.png")
+        if path is None:
+            fd, path = tempfile.mkstemp(prefix="phone-remote-", suffix=".png")
+            os.close(fd)
+        path = Path(path)
         path.write_bytes(base64.b64decode(r["png_b64"]))
         return str(path), r["bounds"]
 
