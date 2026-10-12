@@ -17,7 +17,7 @@ of you.
 
 - `ensure_device()` - Screen bounds once the device is usable, or raises with what the user has to do.
 - `screen(min_confidence=0.3)` - Visible text as `{text, confidence, source, x, y, w, h}` boxes. On Android the boxes come from the accessibility tree; on iPhone Mirroring they come from recognizing text.
-- `screenshot(path=None)` - Capture the screen to a PNG and return its path.
+- `screenshot(path=None)` - Capture the screen to a PNG, print its path, and return it.
 - `find_text(query, exact=False)` - Visible text boxes matching `query`.
 - `tap_text(query, index=0, exact=False)` - Tap the center of visible text matching `query`.
 - `tap(x, y)` - Tap one point.

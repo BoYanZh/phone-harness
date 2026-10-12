@@ -63,8 +63,24 @@ class SkillOutput(unittest.TestCase):
         self.assertIn("The main helpers are listed in [Helpers](#helpers).", text)
         self.assertIn("\n## Helpers\n", text)
         self.assertIn("`screen(min_confidence=0.3)`", text)
+        self.assertIn("`screenshot(path=None)` - Capture the screen to a PNG, print its path, and return it.", text)
         self.assertIn("`screen_info()`", text)
         self.assertNotIn("ocr()", text)
+
+    def test_screenshot_prints_the_path_it_returns(self):
+        import contextlib
+
+        from phone_harness import helpers
+
+        path = "/tmp/phone-harness-example.png"
+        saved = helpers.send
+        helpers.send = lambda op, **kw: (path, {"w": 1})
+        self.addCleanup(setattr, helpers, "send", saved)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            returned = helpers.screenshot()
+        self.assertEqual(returned, path)
+        self.assertEqual(buf.getvalue().strip(), path)
 
     def test_screen_is_the_name_of_ocr(self):
         from phone_harness.helpers import ocr, screen

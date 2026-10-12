@@ -118,13 +118,15 @@ def screen_info():
 
 
 def screenshot(path=None):
-    """Capture the screen to a PNG and return its path. View it to see the
-    phone; combine with screen() for coordinates.
+    """Capture the screen to a PNG, print its path, and return it. View it
+    to see the phone; combine with screen() for coordinates.
 
-    On iPhone Mirroring this still works when connection_state() is not
-    'ready', as long as the mirroring window exists. Looking does not
-    press Connect."""
+    The printed path is how a caller that only sees stdout can hand the
+    image back. On iPhone Mirroring this still works when
+    connection_state() is not 'ready', as long as the mirroring window
+    exists. Looking does not press Connect."""
     p, _ = send("screen.capture", path=path)
+    print(p)
     return p
 
 

@@ -69,8 +69,10 @@ class Base(unittest.TestCase):
         self.ctx = FakeCtx()
         self.plugin.register(self.ctx)
         # The suffix scrub, not a Hermes install that may or may not be on this machine.
-        self._saved_modules = {name: sys.modules.get(name) for name in
-                               ("tools", "tools.environments", "tools.environments.local")}
+        self._saved_modules = {name: sys.modules.get(name) for name in (
+            "tools", "tools.environments", "tools.environments.local",
+            "tools.vision_tools", "tools.vision_tools_history_budget",
+        )}
         tools = types.ModuleType("tools")
         tools.__path__ = []
         environments = types.ModuleType("tools.environments")
@@ -81,6 +83,8 @@ class Base(unittest.TestCase):
         sys.modules["tools"] = tools
         sys.modules["tools.environments"] = environments
         sys.modules["tools.environments.local"] = local
+        sys.modules.pop("tools.vision_tools", None)
+        sys.modules.pop("tools.vision_tools_history_budget", None)
         self.addCleanup(self._restore_modules)
 
     def _restore_modules(self):
@@ -91,7 +95,44 @@ class Base(unittest.TestCase):
                 sys.modules[name] = module
 
     def run_tool(self, code, **args):
-        return json.loads(self.plugin.phone_exec({"code": code, **args}))
+        result = self.plugin.phone_exec({"code": code, **args})
+        if isinstance(result, dict) and result.get("_multimodal"):
+            result = result["text_summary"]
+        return json.loads(result)
+
+    def save_code(self, path: Path) -> str:
+        return (
+            "from pathlib import Path\n"
+            f"p = Path({str(path)!r})\n"
+            "p.write_bytes(b'img')\n"
+            "print(p)\n"
+        )
+
+    def install_vision(self, *, native=True, resize=None, embed_bytes=256_000, max_dimension=1568):
+        tools = sys.modules["tools"]
+        vision = types.ModuleType("tools.vision_tools")
+        budget = types.ModuleType("tools.vision_tools_history_budget")
+        calls = []
+
+        def default_resize(path, mime_type=None, max_base64_bytes=None, max_dimension=None, force_jpeg=False):
+            calls.append({
+                "path": Path(path),
+                "mime_type": mime_type,
+                "max_base64_bytes": max_base64_bytes,
+                "max_dimension": max_dimension,
+                "force_jpeg": force_jpeg,
+            })
+            return "data:image/jpeg;base64,qq"
+
+        vision._EMBED_MAX_DIMENSION = max_dimension
+        vision._should_use_native_vision_fast_path = lambda: native
+        vision._resize_image_for_vision = resize or default_resize
+        budget.resolve_embed_target_bytes = lambda: embed_bytes
+        tools.vision_tools = vision
+        tools.vision_tools_history_budget = budget
+        sys.modules["tools.vision_tools"] = vision
+        sys.modules["tools.vision_tools_history_budget"] = budget
+        return calls
 
 
 class Registration(Base):
@@ -106,6 +147,8 @@ class Registration(Base):
         description = self.ctx.tools["phone_exec"]["schema"]["description"]
         self.assertIn("ensure_device()", description)
         self.assertIn("screen()", description)
+        self.assertIn("screenshot()", description)
+        self.assertIn("attached", description)
         self.assertIn("phone-harness:phone-harness", description)
         self.assertIn("passwords", description)
         self.assertNotIn("scroll_until", description)
@@ -516,11 +559,156 @@ class Running(Base):
         self.assertEqual(result["exit_code"], 1)
         self.assertIn("iPhone in Use", result["stderr"])
 
-    def test_screenshot_paths_in_the_output_are_listed(self):
+    def test_a_screenshot_written_during_the_call_is_listed(self):
         shot = self.data / "shot.png"
-        shot.write_bytes(b"\x89PNG")
-        result = self.run_tool(f"print('saved {shot}')")
+        result = self.run_tool(self.save_code(shot))
         self.assertEqual(result["screenshots"], [str(shot)])
+        self.assertTrue(shot.is_file())
+
+    def test_an_image_path_on_stderr_is_not_attached(self):
+        calls = self.install_vision()
+        shot = self.data / "err.png"
+        code = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            f"p = Path({str(shot)!r})\n"
+            "p.write_bytes(b'img')\n"
+            "sys.stderr.write(str(p) + '\\n')\n"
+            "print('done')\n"
+        )
+        raw = self.plugin.phone_exec({"code": code})
+        self.assertIsInstance(raw, str)
+        self.assertNotIn("screenshots", json.loads(raw))
+        self.assertEqual(calls, [])
+
+    def test_an_older_image_path_is_not_this_call(self):
+        shot = self.data / "old.png"
+        shot.write_bytes(b"png")
+        old = time.time() - 30
+        os.utime(shot, (old, old))
+        result = self.run_tool(f"print({str(shot)!r})")
+        self.assertNotIn("screenshots", result)
+
+    def test_only_an_absolute_image_from_this_call_counts(self):
+        missing = "/no/such/phone-harness-shot.png"
+        code = (
+            "print('shot.png')\n"
+            "print('./nested.jpg')\n"
+            f"print({missing!r})\n"
+            "print('https://cdn.example/a.png')\n"
+            "print('/tmp/notes.png.bak')\n"
+        )
+        result = self.run_tool(code)
+        self.assertNotIn("screenshots", result)
+        found = self.plugin._IMAGE_PATH.findall(
+            r"C:\shots\a.JPEG /tmp/b.webp shot.png ./c.jpg '/tmp/e.png' /tmp/a.png.bak"
+        )
+        self.assertIn(r"C:\shots\a.JPEG", found)
+        self.assertIn("/tmp/b.webp", found)
+        self.assertIn("/tmp/e.png", found)
+        self.assertNotIn("shot.png", found)
+        self.assertNotIn("./c.jpg", found)
+        self.assertFalse(any(item.endswith("c.jpg") or item.endswith(".bak") for item in found))
+
+    def test_the_last_fresh_image_is_the_one_kept(self):
+        first = self.data / "first.png"
+        second = self.data / "second.jpg"
+        stale = self.data / "stale.webp"
+        stale.write_bytes(b"old")
+        os.utime(stale, (time.time() - 30, time.time() - 30))
+        code = self.save_code(first) + self.save_code(second) + f"print({str(stale)!r})\n"
+        result = self.run_tool(code)
+        self.assertEqual(result["screenshots"], [str(second)])
+
+    def test_a_screenshot_is_attached_when_the_model_can_view_images(self):
+        cases = (
+            ("live.png", "image/png"),
+            ("live.jpg", "image/jpeg"),
+            ("live.jpeg", "image/jpeg"),
+            ("live.webp", "image/webp"),
+            ("live.PNG", "image/png"),
+        )
+        for name, mime in cases:
+            with self.subTest(name=name):
+                calls = self.install_vision(embed_bytes=1234, max_dimension=1568)
+                shot = self.data / name
+                raw = self.plugin.phone_exec({"code": self.save_code(shot)})
+                self.assertIsInstance(raw, dict)
+                self.assertTrue(raw["_multimodal"])
+                self.assertEqual(raw["meta"], {"screenshot_path": str(shot), "native_vision": True})
+                self.assertEqual(raw["content"][0]["type"], "text")
+                self.assertIn("inspect it with your native vision", raw["content"][0]["text"])
+                self.assertEqual(raw["content"][1], {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/jpeg;base64,qq"},
+                })
+                summary = json.loads(raw["text_summary"])
+                self.assertEqual(summary["screenshots"], [str(shot)])
+                self.assertTrue(summary["success"])
+                self.assertEqual(calls, [{
+                    "path": shot,
+                    "mime_type": mime,
+                    "max_base64_bytes": 1234,
+                    "max_dimension": 1568,
+                    "force_jpeg": True,
+                }])
+
+    def test_a_failed_script_still_attaches_the_screenshot_it_saved(self):
+        calls = self.install_vision()
+        shot = self.data / "then-fail.png"
+        raw = self.plugin.phone_exec({"code": self.save_code(shot) + "raise SystemExit(2)\n"})
+        self.assertIsInstance(raw, dict)
+        summary = json.loads(raw["text_summary"])
+        self.assertFalse(summary["success"])
+        self.assertEqual(summary["exit_code"], 2)
+        self.assertEqual(summary["screenshots"], [str(shot)])
+        self.assertEqual(calls[0]["path"], shot)
+
+    def test_attach_falls_back_to_text_when_the_model_cannot_view_images(self):
+        calls = self.install_vision(native=False)
+        shot = self.data / "text-only.png"
+        raw = self.plugin.phone_exec({"code": self.save_code(shot)})
+        self.assertIsInstance(raw, str)
+        payload = json.loads(raw)
+        self.assertEqual(payload["screenshots"], [str(shot)])
+        self.assertNotIn("_multimodal", payload)
+        self.assertEqual(calls, [])
+
+    def test_attach_falls_back_to_text_when_resizing_fails(self):
+        def boom(*args, **kwargs):
+            raise RuntimeError("cannot read image")
+
+        self.install_vision(resize=boom)
+        shot = self.data / "broken.png"
+        raw = self.plugin.phone_exec({"code": self.save_code(shot)})
+        self.assertIsInstance(raw, str)
+        payload = json.loads(raw)
+        self.assertEqual(payload["screenshots"], [str(shot)])
+        self.assertNotIn("data:image", raw)
+
+    def test_attach_falls_back_to_text_when_the_image_data_is_unusable(self):
+        self.install_vision(resize=lambda *args, **kwargs: "")
+        shot = self.data / "empty.png"
+        raw = self.plugin.phone_exec({"code": self.save_code(shot)})
+        self.assertIsInstance(raw, str)
+        self.assertEqual(json.loads(raw)["screenshots"], [str(shot)])
+
+    def test_attach_falls_back_to_text_when_vision_support_is_missing(self):
+        shot = self.data / "plain.png"
+        raw = self.plugin.phone_exec({"code": self.save_code(shot)})
+        self.assertIsInstance(raw, str)
+        self.assertEqual(json.loads(raw)["screenshots"], [str(shot)])
+
+    def test_a_file_modified_within_the_timestamp_slack_counts(self):
+        shot = self.data / "edge.png"
+        shot.write_bytes(b"x")
+        # Whole-second filesystems can store the mtime a second early. A file
+        # written just before the check stays inside that slack; one from
+        # several seconds ago does not.
+        self.assertEqual(self.plugin._find_screenshot(str(shot), time.time()), str(shot))
+        old = time.time() - 10
+        os.utime(shot, (old, old))
+        self.assertIsNone(self.plugin._find_screenshot(str(shot), time.time()))
 
     def test_empty_code_and_a_missing_module_are_errors_not_crashes(self):
         self.assertFalse(self.run_tool("   ")["success"])
@@ -565,3 +753,6 @@ class PluginManifest(unittest.TestCase):
         self.assertIn("heuristic", text)
         self.assertIn("bypassed", text)
         self.assertNotIn("never ask", text)
+        self.assertIn("attached to the tool result", text)
+        self.assertIn("screenshots", text)
+        self.assertIn("`screenshot()` prints the path", text)

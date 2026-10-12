@@ -2,7 +2,8 @@
 
 The model writes a Python script. The plugin pipes it on stdin to the phone-harness Hermes
 installed from this plugin's python_dependencies, which runs it with the phone helpers
-pre-imported against the user's phone and hands stdout back as the tool result. Each call is
+pre-imported against the user's phone and hands stdout back as the tool result. A screenshot
+saved during the call is attached to that result when the model can view images. Each call is
 a fresh interpreter; the phone and the agent workspace persist.
 
 Safety, in order of what it protects:
@@ -27,6 +28,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -44,8 +46,10 @@ DESCRIPTION = (
     "window, an Android over adb, or a Phone Harness Cloud phone. `code` runs as Python with the phone "
     "helpers pre-imported; print() whatever you need back. Each call is a fresh interpreter (variables "
     "do not persist); the phone keeps its state. Start with ensure_device(); it covers iPhone "
-    "Mirroring, Android, and a cloud phone. Read what is on screen with screen(). Ask the user before "
-    "anything outward-facing or hard to undo (sending, posting, buying, deleting, changing settings). "
+    "Mirroring, Android, and a cloud phone. Read what is on screen with screen(). screenshot() prints "
+    "the image path it saved, and that image is attached to this result when you can view images. "
+    "Ask the user before anything outward-facing or hard to undo (sending, posting, buying, deleting, "
+    "changing settings). "
     "Never type passwords, PINs or 2FA codes. Read the skill phone-harness:phone-harness for the helpers."
 )
 
@@ -499,9 +503,12 @@ def _kill_group(proc: subprocess.Popen) -> None:
         os.killpg(proc.pid, signal.SIGKILL)
 
 
+def _payload(success: bool, **fields) -> dict:
+    return {"success": success, **{k: v for k, v in fields.items() if v not in (None, "", [])}}
+
+
 def _result(success: bool, **fields) -> str:
-    return json.dumps({"success": success, **{k: v for k, v in fields.items() if v not in (None, "", [])}},
-                      ensure_ascii=False)
+    return json.dumps(_payload(success, **fields), ensure_ascii=False)
 
 
 def _timeout(value) -> int:
@@ -511,10 +518,82 @@ def _timeout(value) -> int:
         return DEFAULT_TIMEOUT_S
 
 
-_PNG = re.compile(r"(/[^\s'\"]+\.png)\b")
+# Absolute PNG / JPEG / WebP paths. A relative path, or a suffix of one, does not count.
+_IMAGE_PATH = re.compile(
+    r"(?<![\w.])((?:[A-Za-z]:[\\/]|/)[^\s\"']+?\.(?:png|jpe?g|webp))(?![\w.])",
+    re.IGNORECASE,
+)
+_IMAGE_MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
 
 
-def phone_exec(args: dict, **kwargs) -> str:
+def _absolute_image(path: str) -> bool:
+    if path.startswith(("/", "\\")):
+        return True
+    return len(path) >= 3 and path[0].isalpha() and path[1] == ":" and path[2] in "/\\"
+
+
+def _find_screenshot(stdout: str, since: float) -> str | None:
+    """Last absolute image path in stdout that exists and was modified during this call.
+
+    A one-second slack covers filesystems that store timestamps in whole seconds.
+    """
+    for path in reversed(_IMAGE_PATH.findall(stdout or "")):
+        if not _absolute_image(path):
+            continue
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) >= since - 1:
+                return path
+        except OSError:
+            continue
+    return None
+
+
+def _attach_screenshot(result: dict, path: str) -> dict | None:
+    """Image tool result for a model that can view it, or None to keep the text result.
+
+    A large image is reduced before it is attached. Any failure keeps the text result.
+    """
+    try:
+        from tools.vision_tools import (
+            _EMBED_MAX_DIMENSION,
+            _resize_image_for_vision,
+            _should_use_native_vision_fast_path,
+        )
+        from tools.vision_tools_history_budget import resolve_embed_target_bytes
+        if not _should_use_native_vision_fast_path():
+            return None
+        mime = _IMAGE_MIME.get(Path(path).suffix.lower(), "image/png")
+        data_url = _resize_image_for_vision(
+            Path(path),
+            mime_type=mime,
+            max_base64_bytes=resolve_embed_target_bytes(),
+            max_dimension=_EMBED_MAX_DIMENSION,
+            force_jpeg=True,
+        )
+        if not isinstance(data_url, str) or not data_url.startswith("data:"):
+            return None
+        text = json.dumps(result, ensure_ascii=False)
+        attached = text + "\n\nThe screenshot from this call is attached — inspect it with your native vision."
+        return {
+            "_multimodal": True,
+            "text_summary": text,
+            "meta": {"screenshot_path": path, "native_vision": True},
+            "content": [
+                {"type": "text", "text": attached},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        }
+    except Exception as exc:
+        log.debug("screenshot attach failed, returning text: %s", exc)
+        return None
+
+
+def phone_exec(args: dict, **kwargs) -> str | dict:
     code = str((args or {}).get("code") or "")
     if not code.strip():
         return _result(False, error="No code provided. Start with: ensure_device(); print(screen_info())")
@@ -529,6 +608,7 @@ def phone_exec(args: dict, **kwargs) -> str:
     try:
         _seed_workspace(workspace)
         with _phone_lock(LOCK_WAIT_S):
+            started = time.time()
             proc = subprocess.Popen(
                 cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace",
@@ -550,9 +630,15 @@ def phone_exec(args: dict, **kwargs) -> str:
         return _result(False, error=f"Failed to launch phone-harness: {e}")
 
     out = out or ""
-    shots = [p for p in dict.fromkeys(_PNG.findall(out)) if os.path.isfile(p)]
-    return _result(proc.returncode == 0, exit_code=proc.returncode, output=out[-OUTPUT_CAP:],
-                   stderr=(err or "").strip()[-STDERR_CAP:], screenshots=shots, workspace=str(workspace))
+    shot = _find_screenshot(out, started)
+    payload = _payload(proc.returncode == 0, exit_code=proc.returncode, output=out[-OUTPUT_CAP:],
+                       stderr=(err or "").strip()[-STDERR_CAP:],
+                       screenshots=[shot] if shot else [], workspace=str(workspace))
+    if shot:
+        attached = _attach_screenshot(payload, shot)
+        if attached is not None:
+            return attached
+    return json.dumps(payload, ensure_ascii=False)
 
 # ---------------------------------------------------------------------------------------------
 # Registration.

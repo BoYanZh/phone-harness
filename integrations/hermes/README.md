@@ -70,10 +70,14 @@ covers each.
 4. The plugin pipes the script on stdin to the phone-harness Hermes installed,
    with `PH_AGENT_WORKSPACE` and `PH_CLIENT=hermes`. It does not set a platform.
    Telemetry is off for Hermes runs unless you opt in with `phone-harness config set telemetry true`.
-5. The result is what the script printed, plus the exit code, the tail of
-   stderr, and any screenshot paths it printed (the agent opens those with
-   `vision_analyze`). A script past its timeout is killed with everything it
-   started.
+5. The result is what the script printed, plus the exit code and the tail of
+   stderr. `screenshot()` prints the path it saved. The last absolute PNG,
+   JPEG, or WebP path in that output that exists and was written during the
+   call is attached to the tool result when the model can view images. A
+   large image is reduced first. If the model cannot view images, or
+   attaching fails, the result stays plain text and the path is in
+   `screenshots` (open it with `vision_analyze`). A script past its timeout
+   is killed with everything it started.
 
 ## Approvals
 
@@ -107,8 +111,8 @@ is still the skill's consent rule: the agent asks you before those.
 
 ## Limits
 
-- Screenshots are not attached to the model's context automatically; the
-  agent views them with `vision_analyze`.
+- A screenshot saved during the call is attached when the model can view
+  images. Otherwise the path is in the text result for `vision_analyze`.
 - No password-vault integration: the agent never types passwords, PINs or 2FA
   codes. Hand the phone back to the user for those.
 - `back()` is Android-only; on an iPhone the agent taps the app's back arrow.
