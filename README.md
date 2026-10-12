@@ -54,7 +54,7 @@ phone-harness <<'PY'
 open_app("Notes")
 tap_text("New Note")
 type_text("hello from the harness")
-print([o["text"] for o in ocr()][:10])
+print([o["text"] for o in screen()][:10])
 PY
 phone-harness --version
 ```

@@ -27,7 +27,7 @@ it a click. Every write stays inside the buffer, so a wrong value is a no-op,
 never a crash.
 
 Select with PHONE_HARNESS_BACKGROUND=1. Coordinates use the same global
-screen-point convention as the mirror backend and ocr(), so every helper on
+screen-point convention as the mirror backend and screen(), so every helper on
 top (tap_text, swipe, scroll_collect) works unchanged — just without focus.
 
 Keyboard (type_text/press) still briefly activates the window: the keyboard

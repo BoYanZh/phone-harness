@@ -75,6 +75,7 @@ class Registration(Base):
     def test_the_tool_description_points_at_the_skill(self):
         description = self.ctx.tools["phone_exec"]["schema"]["description"]
         self.assertIn("ensure_device()", description)
+        self.assertIn("screen()", description)
         self.assertIn("phone-harness:phone-harness", description)
         self.assertIn("passwords", description)
         self.assertNotIn("scroll_until", description)
@@ -82,7 +83,7 @@ class Registration(Base):
 
 class ApprovalGate(Base):
     PHONE_ONLY = [
-        'ensure_device()\nprint([o["text"] for o in ocr()][:10])',
+        'ensure_device()\nprint([o["text"] for o in screen()][:10])',
         'import json, re, time\nprint(json.dumps(screen_info()))',
         'from phone_harness import helpers\nhelpers.tap_text("Weather")',
         'from collections import Counter\nprint(Counter(o["text"] for o in ocr()))',
