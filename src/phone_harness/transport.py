@@ -155,6 +155,11 @@ def connect(platform=None, **kw):
                 # same catalog phone again. This does not rent one itself.
                 lost = cloud.lost()
                 if lost:
+                    # Reporting clears the stored note so the next command does
+                    # not repeat it. This call still fails, and so does a later
+                    # call in this process: lost() remembers what it reported.
+                    if lost.get("sid") not in cloud._reported_dead:
+                        cloud.report_ended(lost)
                     raise cloud.CloudPhoneError(cloud.ended_message(lost))
     platform = platform.lower()
     if platform in ("ios", "iphone", "ipad"):

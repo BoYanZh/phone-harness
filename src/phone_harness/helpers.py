@@ -119,7 +119,7 @@ def screen_info():
 
 def screenshot(path=None):
     """Capture the screen to a PNG and return its path. View it to see the
-    phone; combine with ocr() for coordinates.
+    phone; combine with screen() for coordinates.
 
     On iPhone Mirroring this still works when connection_state() is not
     'ready', as long as the mirroring window exists. Looking does not
@@ -174,12 +174,18 @@ def interruption(before, after):
 
 # --- reading the screen -----------------------------------------------------
 
-def ocr(min_confidence=0.3):
+def screen(min_confidence=0.3):
     """All visible text with tap-ready centers: [{text, confidence, source,
     x, y, w, h}]. Prefer this over eyeballing screenshots for anything with a
     text label. `source` is "pixels" when a recogniser inferred the string and
-    "tree" when the OS reported it exactly."""
+    "tree" when the OS reported it exactly.
+
+    On Android the boxes come from the accessibility tree. On iPhone Mirroring
+    they come from recognizing the text in the mirror."""
     return send("screen.text", min_confidence=min_confidence)
+
+
+ocr = screen  # old name, still called by existing helpers and skills
 
 
 def ocr_pixels(min_confidence=0.3):
@@ -191,7 +197,7 @@ def ocr_pixels(min_confidence=0.3):
 def find_text(query, exact=False):
     """Visible text matching query (case-insensitive substring by default)."""
     q = query.lower()
-    return [o for o in ocr()
+    return [o for o in screen()
             if (o["text"].lower() == q if exact else q in o["text"].lower())]
 
 
@@ -200,7 +206,7 @@ def tap_text(query, index=0, exact=False):
     failure, so the next step is informed."""
     hits = find_text(query, exact=exact)
     if not hits:
-        visible = [o["text"] for o in ocr()][:30]
+        visible = [o["text"] for o in screen()][:30]
         raise RuntimeError(f"no visible text matches {query!r}; saw: {visible}")
     hit = hits[index]
     tap(hit["x"], hit["y"])
@@ -210,7 +216,7 @@ def tap_text(query, index=0, exact=False):
 # --- accessibility tree (where the device has one) --------------------------
 
 def ui():
-    """The accessibility tree. Exact where ocr() is inferred. Raises
+    """The accessibility tree. Exact where screen() is inferred. Raises
     Unsupported on iPhone Mirroring, whose window is an opaque video stream —
     gate on supports('tree')."""
     return send("tree")
@@ -313,7 +319,7 @@ def _point(at, win):
     Aiming at the centre of Weather hits the temperature readout, which does
     not scroll, while the hourly strip below it does.
 
-    `at` may be (x, y) in screen points, or any box from ocr()/find_text()/
+    `at` may be (x, y) in screen points, or any box from screen()/find_text()/
     find_nodes() — so `scroll("right", at=find_text("Now")[0])` reads the way
     you would say it.
     """
@@ -375,7 +381,7 @@ def scroll(direction="down", amount=0.3, at=None):
     'down' reveals content further down the list, 'right' what is off to the
     right. `amount` is a fraction of the screen.
 
-    `at` aims the gesture — (x, y) or a box from ocr()/find_text(). Only the
+    `at` aims the gesture — (x, y) or a box from screen()/find_text(). Only the
     scroll view under that point moves, so pass it whenever the thing you want
     to scroll is not the full-screen list: a horizontal strip, a carousel, an
     inner list. Defaults to the window centre.
@@ -402,7 +408,7 @@ def _content_texts(min_conf=0.4, top_frac=0.06, bottom_frac=0.92):
     win = _win()
     top = win["y"] + win["h"] * top_frac
     bot = win["y"] + win["h"] * bottom_frac
-    return [o for o in ocr()
+    return [o for o in screen()
             if top < o["y"] < bot and o["confidence"] >= min_conf]
 
 

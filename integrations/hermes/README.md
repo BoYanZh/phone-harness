@@ -10,7 +10,7 @@ phone_exec(code='''
 ensure_device()
 open_app("Weather")
 wait_stable()
-print([o["text"] for o in ocr()][:12])
+print([o["text"] for o in screen()][:12])
 ''')
 ```
 

@@ -41,7 +41,7 @@ DESCRIPTION = (
     "window, an Android over adb, or a Phone Harness Cloud phone. `code` runs as Python with the phone "
     "helpers pre-imported; print() whatever you need back. Each call is a fresh interpreter (variables "
     "do not persist); the phone keeps its state. Start with ensure_device(); it covers iPhone "
-    "Mirroring, Android, and a cloud phone. Ask the user before "
+    "Mirroring, Android, and a cloud phone. Read what is on screen with screen(). Ask the user before "
     "anything outward-facing or hard to undo (sending, posting, buying, deleting, changing settings). "
     "Never type passwords, PINs or 2FA codes. Read the skill phone-harness:phone-harness for the helpers."
 )

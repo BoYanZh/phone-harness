@@ -5,11 +5,47 @@ description: "Control the user's phone - an iPhone through the Mac's iPhone Mirr
 
 # phone-harness
 
+The main helpers are listed in [Helpers](#helpers).
+
 Direct control of a phone from Python scripts. The same helpers drive every
 kind of phone below; what differs is how each one sees and touches the screen,
 and that is what the per-phone sections below are for. Read **Which phone**, the
 shared **Working method**, and then only the section for the phone in front
 of you.
+
+## Helpers
+
+- `ensure_device()` - Screen bounds once the device is usable, or raises with what the user has to do.
+- `screen(min_confidence=0.3)` - Visible text as `{text, confidence, source, x, y, w, h}` boxes. On Android the boxes come from the accessibility tree; on iPhone Mirroring they come from recognizing text.
+- `screenshot(path=None)` - Capture the screen to a PNG and return its path.
+- `find_text(query, exact=False)` - Visible text boxes matching `query`.
+- `tap_text(query, index=0, exact=False)` - Tap the center of visible text matching `query`.
+- `tap(x, y)` - Tap one point.
+- `long_press(x, y, duration=0.8)` - Press and hold a point.
+- `type_text(text, delay=0.03, keystrokes=False)` - Type into the focused field.
+- `press(combo)` - Press a key, such as `press("enter")`.
+- `open_app(name)` - Launch an app and return the app id that launched.
+- `swipe(direction, distance=0.4, at=None)` - Flick. `direction` is finger motion: `"up"`, `"down"`, `"left"`, or `"right"`.
+- `scroll(direction="down", amount=0.3, at=None)` - Scroll. `direction` is the content to reveal: `"down"`, `"up"`, `"left"`, or `"right"`.
+- `scroll_screen(direction="down", amount=0.6, settle=2.5, moved_thresh=None, at=None)` - One scroll, then the text on screen before and after.
+- `scroll_until(done, direction="down", amount=0.6, max_scrolls=60, settle=2.5, at=None)` - Scroll until `done(boxes)` is truthy or the screen stops changing.
+- `scroll_collect(extract=None, key=None, direction="down", amount=0.6, max_scrolls=400, end_after=3, settle=2.5, on_progress=None, at=None)` - Scroll a list and return `{items, stop, scrolls}`.
+- `home()` - Go to the Home Screen.
+- `back()` - System Back, where the phone has one.
+- `app_switcher()` - Open the app switcher.
+- `wait_stable(timeout=6.0, interval=0.5, settle=2)` - Wait until the screen stops changing.
+- `wait_for_text(query, timeout=10.0, exact=False, interval=0.5)` - Poll until `query` is visible; return its box, or None.
+- `wait_for_app(app_id, timeout=10.0, interval=0.3)` - Poll until `app_id` is the foreground app.
+- `ui()` - The accessibility tree, where the device has one.
+- `tap_ui(query, index=0, exact=False, clickable_only=False)` - Tap an element in the accessibility tree.
+- `current_app()` - Foreground app id, where the device exposes one.
+- `list_apps(include_system=False)` - Installed app ids.
+- `screen_info()` - `{window, frontmost, img_px}`: bounds, focus, and capture size.
+- `find_window()` - Screen bounds `{x, y, w, h, id}`, or None if there is no device.
+- `image_point(x, y, image_size=None)` - Convert a screenshot pixel to a screen point.
+- `tap_image_point(x, y, image_size=None)` - Tap a point taken from a screenshot.
+- `connection_state()` - Backend state string; `"ready"` means usable.
+- `shell(cmd, binary=False, timeout=60)` - Run a shell command on the phone, where the device has a shell.
 
 ## Which phone?
 
@@ -48,7 +84,7 @@ phone-harness <<'PY'
 # task: report the OS version and model name from Settings
 # step: open Settings, find About, read the screen
 open_app("Settings")
-print([o["text"] for o in ocr()][:10])
+print([o["text"] for o in screen()][:10])
 PY
 ```
 
@@ -60,7 +96,7 @@ PY
   you are about to do), one line after (what you saw). Never run two scripts
   in a row in silence. The `# task:`/`# step:` comments are not this - the user
   cannot see them.
-- **Read with `ocr()`, not by eyeballing screenshots.** Every visible string
+- **Read with `screen()`, not by eyeballing screenshots.** Every visible string
   comes back with a tap-ready centre: `[{text, confidence, source, x, y, w, h}]`.
   Filter in Python before printing. `tap_text("Weather")` taps by label and,
   on failure, raises with what IS visible - read the exception before retrying.
@@ -71,7 +107,7 @@ PY
      contents. Most phone failures are silent no-ops; if you cannot name the
      expected change you cannot tell success from one.
   2. Do one thing, then check that one thing: `wait_for_text("Got it")`,
-     `wait_for_app("com.android.chrome")` or `wait_stable()`, then one `ocr()`.
+     `wait_for_app("com.android.chrome")` or `wait_stable()`, then one `screen()`.
      Do not `wait(n)` for a screen to load.
   3. Once a sequence is proven, batch it: a whole sub-task in one script is far
      faster than a call per turn. Keep one cheap check at the end.
@@ -87,7 +123,7 @@ PY
      workspace is never overwritten. To get a fresh default, delete the
      workspace folder; it is recreated on the next run.
 - **The harness reports, you decide.** Helpers return observations, never a
-  verdict on your intent. Diff two `ocr()` sets, watch one label, count rows,
+  verdict on your intent. Diff two `screen()` sets, watch one label, count rows,
   poll until something appears - whatever matches what you asked for.
 - **Navigation:** `home()`, `back()`, `app_switcher()`, `open_app("Notes")`,
   `type_text("...")`, `press("enter")`, `long_press(x, y)`, `tap(x, y)`.
@@ -107,7 +143,7 @@ PY
   `{before, after, boxes}` for you to judge. `at=` aims the gesture at an
   inner list or strip; only the scroll view under that point moves.
 - **`type_text` needs a focused field** on every phone. Tap the field, wait for
-  the keyboard, then type; verify with `ocr()`, because unfocused text goes
+  the keyboard, then type; verify with `screen()`, because unfocused text goes
   elsewhere or nowhere.
 - **Consent.** This is the user's real phone and real accounts. Stop and ask
   before anything outward-facing or hard to reverse: sending, posting,
@@ -204,19 +240,23 @@ phone-harness cloud open                     # the dashboard: the user takes the
   `cloud phone reset --yes` wipes that phone's stored state: apps, logins,
   and data. The CLI has no iPhone reset; that is the operator's.
 - **A cloud session that ends does not hand you another phone.** If the
-  session attached to this script expires, the error says `session <sid> expired`.
+  session this command is using expires, the error says `session <sid> expired`.
   If the service loses it, the error says the cloud phone failed and is
-  unreachable. Either way the script stops. It does not drive the personal
-  phone, and the CLI does not rent a replacement. Start the same catalog
-  phone again with a longer duration and continue the task:
-  `phone-harness cloud start <same phone> --for <longer>`. `<same phone>` is
-  that phone's id or label (or `ios` / `android` when only one entry has that
-  platform). `<longer>` is a duration longer than the session that just
-  ended (`90s`, `15m`, or a number of minutes). A `--session` pin whose
-  session expired is the same error, naming that sid. A missing cloud state
-  file still means no cloud phone was attached, and the personal phone is
-  used as today. An unreadable state file is an error, not a cue to switch
-  phones. `cloud stop` clears the failure; a new `cloud start` does too.
+  unreachable. That command stops. It does not drive another phone, and the
+  CLI does not rent a replacement. The saved note of that dead session is
+  removed once the error has been reported, or once `phone-harness cloud` has
+  shown it once, so later status output does not repeat it. A command that
+  hits the dead session while that note is still there fails with the same
+  message. Start the same catalog phone again with a longer duration and
+  continue the task: `phone-harness cloud start <same phone> --for <longer>`.
+  `<same phone>` is that phone's id or label (or `ios` / `android` when only
+  one entry has that platform). `<longer>` is a duration longer than the
+  session that just ended (`90s`, `15m`, or a number of minutes). A
+  `--session` pin whose session expired is the same error, naming that sid.
+  A missing cloud state file still means no cloud phone was attached, and the
+  personal phone is used as today. An unreadable state file is an error, not
+  a cue to switch phones. `cloud stop` and a new `cloud start` also drop a
+  note that has not been reported yet.
 - The adb address the CLI shows is not a secret; the unlock code is. Do not
   look for it, print it, or ask the user for it.
 
@@ -280,24 +320,24 @@ documents or decodes.
 Trust `GET /ops` when the host's list is shorter than this table.
 
 - **Coordinates are `screen.bounds`.** `tap(x, y)`, `find_window()`,
-  `send("screen.require")`, and OCR centres all use that space:
+  `send("screen.require")`, and centres from `screen()` all use that space:
   `{x, y, w, h, id}`. A point read off the PNG goes through
   `tap_image_point()` once `screen_info()` returns `img_px`. Otherwise tap
-  an OCR centre.
+  a centre from `screen()`.
 - **`screen_info()`, `image_point()`, and `tap_image_point()` measure the
   PNG** so a point you read off a screenshot can become a tap. If
   `screen_info()` raises `ModuleNotFoundError: No module named 'Quartz'`,
   that helper imported the macOS Vision module to read the PNG's pixel size.
-  `ocr()` sends `screen.text` to the host and still works - keep using
+  `screen()` sends `screen.text` to the host and still works - keep using
   `tap_text()`. If `screen_info()` returns `img_px`, those three helpers work
   on any OS. [PR #108](https://github.com/ShawnPana/phone-harness/pull/108)
   ("screen_info() no longer needs macOS") is the change that reads the PNG
   header instead of importing Quartz; until `screen_info()` returns `img_px`
   off a Mac, treat the Quartz error as those three helpers only.
 - **`type_text()` types into the focused field.** Tap the field first. Text
-  sent before the field has focus goes nowhere, so check with `ocr()`
+  sent before the field has focus goes nowhere, so check with `screen()`
   afterwards.
-- **Act, then look.** One action, then `ocr()` or `screenshot()`, then the
+- **Act, then look.** One action, then `screen()` or `screenshot()`, then the
   next. Do not `wait(n)` for a screen to load. The client allows
   `screen.capture` 60s, `apps.launch` and `apps.list` 90s, and `input.text`
   the timeout in the table.
@@ -311,7 +351,7 @@ Trust `GET /ops` when the host's list is shorter than this table.
   does not list `tree`, `nav.back`, and `apps.current`. `home()` is the Home
   button. `shell()` is Unsupported.
 - **Confirm `open_app`.** It sends `apps.launch` and can return with the app
-  still not in front. Check with `ocr()` or a screenshot. If it missed,
+  still not in front. Check with `screen()` or a screenshot. If it missed,
   `home()` and tap the icon. `tap_icon()` in
   `agent-workspace/agent_helpers.py` aims 35 points above the label for the
   mirroring window, so measure this phone's icon yourself.
@@ -330,12 +370,12 @@ PY
 ```
 
 - **Coordinates are device pixels;** the screenshot is 1:1 with `tap(x, y)`.
-- **`ocr()` is the accessibility tree** (`source: "tree"`) - exact, no
+- **`screen()` is the accessibility tree** (`source: "tree"`) - exact, no
   misreads. Prefer `ui()` / `find_nodes()` / `tap_ui()`: they also see
   elements with no visible text (icons with a content-description, fields by
   resource-id like `tap_ui("url_bar")`).
 - **Some screens never give up their tree** - a playing video, some Settings
-  pages. On a Mac, `ocr()` then reads the screenshot with Vision instead
+  pages. On a Mac, `screen()` then reads the screenshot with Vision instead
   (`source: "pixels"`, fuzzier, still tap-ready; the first read costs ~12s
   while uiautomator gives up, later reads are fast). Elsewhere it raises
   saying so; take a `screenshot()` and look at it instead of retrying.
@@ -361,14 +401,14 @@ PY
   accented letters.
 - **Verify cheaply, then read.** adb reports nothing about outcomes - a tap on
   empty space "succeeds". After an action: `wait_for_app(...)` (~0.1s a poll)
-  or `wait_for_text(...)` (returns the box or None), then `ui()`/`ocr()` once.
+  or `wait_for_text(...)` (returns the box or None), then `ui()`/`screen()` once.
   The tree costs ~2-3s a call on a slow phone and a screenshot ~0.5s, so
   batching a proven sub-task is worth a lot; a batch of unverified steps fails
   silently and tells you nothing about which one broke.
 - No focus to keep: nothing on the Mac has to be frontmost, and
   `interruption(before, after)` always reports nothing disturbed.
 - **A desk phone locks itself** after its screen timeout. `connection_state()`
-  reports `locked`; taps and `ocr()` refuse with the same message. Ask the user
+  reports `locked`; taps and `screen()` refuse with the same message. Ask the user
   to unlock - never type a PIN. `screenshot()` still works locked, so you can
   show them what you see. For a task longer than a minute, ask the user, then
   `phone-harness android awake --bg` keeps it awake without changing any phone
@@ -459,7 +499,7 @@ events into it for hands. All coordinates are global macOS screen points.
   theory.
 - **The window is a video stream.** macOS accessibility sees nothing inside
   it; AppleScript `click at` fails silently. Only HID-level CGEvents work.
-- **The window moves.** Never cache coordinates across calls; `ocr()` and
+- **The window moves.** Never cache coordinates across calls; `screen()` and
   `swipe()` re-query bounds every time.
 - Mouse taps map to touches 1:1, but there is no multi-touch: no pinch, no
   two-finger gestures.

@@ -6,7 +6,8 @@ iPhone Mirroring app, an **Android** over adb (USB or Wi‑Fi), or a phone from
 Phone Harness Cloud — an Android over adb, or an iPhone the helpers drive over
 HTTPS (`phone-harness cloud start` with that phone's name from `cloud ls`).
 Same helpers either way; you
-choose a default and can switch per call.
+choose a default and can switch per call. Reading on-screen text is
+`screen()`; the helper names and signatures are in `SKILL.md`.
 
 ## Common
 

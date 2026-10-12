@@ -57,3 +57,16 @@ class SkillOutput(unittest.TestCase):
         finally:
             sys.stdout = old
         self.assertEqual(out.buffer.getvalue(), "a \u2192 b".encode("utf-8"))
+
+    def test_skill_points_at_helpers_and_names_screen(self):
+        text = _skill_text()
+        self.assertIn("The main helpers are listed in [Helpers](#helpers).", text)
+        self.assertIn("\n## Helpers\n", text)
+        self.assertIn("`screen(min_confidence=0.3)`", text)
+        self.assertIn("`screen_info()`", text)
+        self.assertNotIn("ocr()", text)
+
+    def test_screen_is_the_name_of_ocr(self):
+        from phone_harness.helpers import ocr, screen
+        self.assertIs(ocr, screen)
+        self.assertEqual(screen.__defaults__, (0.3,))

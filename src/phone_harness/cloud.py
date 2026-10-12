@@ -407,6 +407,91 @@ def ended_message(rec):
             "The CLI does not rent a phone by itself.")
 
 
+# Sids whose ended-session message this process has already shown. The copy
+# on disk is removed at that moment so the next command does not print it
+# again. Remembering it here is what keeps the rest of this process from
+# treating the dead phone as "no phone" and driving a different one.
+_reported_dead = {}
+_reported_fallback = None
+
+
+def _reported_for(pin):
+    for sid, rec in _reported_dead.items():
+        if _pin_hits(sid, pin):
+            return rec
+    return None
+
+
+def _forget_stored_dead(sid):
+    """Drop the stored dead-session note for `sid`.
+
+    That is the `gone` mark and the saved session itself (the attached one
+    and the `--session` copy). Other remembered sessions stay. No network.
+    """
+    state = _load_state()
+    changed = False
+    gone = state.get("gone")
+    if isinstance(gone, dict) and (not sid or gone.get("sid") == sid):
+        state.pop("gone", None)
+        changed = True
+    sessions = dict(state.get("sessions") or {})
+    current = state.get("session") if isinstance(state.get("session"), dict) else None
+
+    def hits(rec, key=None):
+        if sid and (key == sid or (isinstance(rec, dict) and rec.get("sid") == sid)):
+            return True
+        return not sid and _expired(rec)
+
+    drop = []
+    for key, rec in sessions.items():
+        if hits(rec, key):
+            drop.append(key)
+    if current and hits(current, current.get("sid")) and current.get("sid") not in drop:
+        drop.append(current.get("sid"))
+    for target in drop:
+        rec = sessions.get(target)
+        if rec is None and current and current.get("sid") == target:
+            rec = current
+        linked = _as_linked(rec)
+        if linked and linked["link"]["kind"] == "adb":
+            try:
+                from .android import _run
+                _run("disconnect", serial_of(linked), timeout=10, check=False)
+            except Exception:
+                pass
+        if target in sessions:
+            sessions.pop(target, None)
+            changed = True
+        if current and current.get("sid") == target:
+            state.pop("session", None)
+            current = None
+            changed = True
+    if sessions:
+        state["sessions"] = sessions
+    elif "sessions" in state:
+        state.pop("sessions", None)
+        changed = True
+    if changed:
+        _save_state(state)
+
+
+def report_ended(rec):
+    """The ended-session message has been shown for this record.
+
+    Forget the stored copy so `phone-harness cloud` and later commands do not
+    print it again. This process still fails if it targets that sid.
+    """
+    global _reported_fallback
+    rec = dict(rec or {})
+    sid = rec.get("sid")
+    if sid:
+        _reported_dead[sid] = rec
+    if not os.environ.get("PHONE_HARNESS_SESSION"):
+        _reported_fallback = rec
+    _forget_stored_dead(sid)
+    return rec
+
+
 def attached(kind=None):
     """The session the helpers should drive, or None; with `kind`, only a
     session reached that way.
@@ -420,21 +505,29 @@ def attached(kind=None):
     None means no cloud phone was attached. A pin whose session has expired
     raises `session <sid> expired` instead of returning None, and an
     unreadable state file raises too: both used to look like "no cloud phone"
-    and the next call drove a different device. An unpinned session whose
-    clock has run out still returns None; `lost()` tells `connect` to raise.
+    and the next call drove a different device. Raising reports that dead
+    session, and the stored note is cleared so a later command does not repeat
+    it. An unpinned session whose clock has run out still returns None;
+    `lost()` tells `connect` to raise.
     """
     state = _load_state()
     pin = os.environ.get("PHONE_HARNESS_SESSION")
     if pin:
+        seen = _reported_for(pin)
+        if seen:
+            raise CloudPhoneError(ended_message(seen))
         raw = _find_recorded(state, pin)
         sess = _as_linked(raw)
         if sess is None:
             gone = state.get("gone")
             if isinstance(gone, dict) and _pin_hits(gone.get("sid"), pin):
+                report_ended(gone)
                 raise CloudPhoneError(ended_message(gone))
             sess = _pull_pinned(pin)
         if _expired(sess):
-            raise CloudPhoneError(ended_message(_ended_record(sess, "expired")))
+            rec = _ended_record(sess, "expired")
+            report_ended(rec)
+            raise CloudPhoneError(ended_message(rec))
     else:
         sess = _as_linked(state.get("session"))
     if sess is None:
@@ -572,6 +665,9 @@ def _store_session(record, make_attached=True):
     Every remembered session stays addressable by `--session`, so a later
     start does not forget the previous phone. Storing one clears a previous
     "gone" mark: the user has a phone again."""
+    _reported_dead.clear()
+    global _reported_fallback
+    _reported_fallback = None
     state = _load_state()
     sessions = _known_sessions(state)
     sessions[record["sid"]] = record
@@ -666,7 +762,12 @@ def lost():
 
     Either the service said it was gone, or its expiry passed while it was
     still attached. `cause` is `expired` or `unreachable`. No network. An
-    unreadable state file raises; it is not "no session"."""
+    unreadable state file raises; it is not "no session".
+
+    Once that message has been reported, the stored note is gone. This
+    process still sees a session it already reported, so a second call in the
+    same script fails instead of switching phones.
+    """
     state = _load_state()
     gone = state.get("gone")
     if isinstance(gone, dict) and gone.get("sid"):
@@ -674,6 +775,8 @@ def lost():
     sess = state.get("session") if isinstance(state.get("session"), dict) else None
     if _expired(sess):
         return _ended_record(sess, "expired", at=sess.get("expires_at"))
+    if _reported_fallback is not None and not os.environ.get("PHONE_HARNESS_SESSION"):
+        return _reported_fallback
     return None
 
 
@@ -1282,6 +1385,9 @@ def _status(args):
         lost_rec = lost()
         if lost_rec:
             print(term.err(ended_message(lost_rec), sys.stdout))
+            # Shown once. The next status must not print it again.
+            if lost_rec.get("sid") not in _reported_dead:
+                report_ended(lost_rec)
             return 1
         running = me.get("active_session_count") or 0
         print("session     none attached" + (f" ({running} running: `phone-harness cloud ls`)"
@@ -1289,8 +1395,9 @@ def _status(args):
         return 0
     if live is None:
         cause = "expired" if _expired(sess) else "unreachable"
-        print(term.err(ended_message(_ended_record(sess, cause)), sys.stdout))
-        _detach(gone=True)
+        rec = _ended_record(sess, cause)
+        print(term.err(ended_message(rec), sys.stdout))
+        report_ended(rec)
         return 1
     state = ("closing — saving the phone"
              if live["state"] == "closing" and _keeps_state(live)

@@ -43,8 +43,8 @@ Check with `phone-harness android` and `phone-harness --doctor android`.
 ## 4. Verify
 
 `phone-harness --doctor` for the default phone (add `ios` or `android` to
-check the other), then a read-only proof: take a screenshot and read the
-screen back to the user.
+check the other), then a read-only proof: `screenshot()` and `screen()`,
+and read what came back to the user.
 
 ## 5. Demo (opt-in)
 
