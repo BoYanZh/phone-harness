@@ -24,7 +24,7 @@ PHONE_HARNESS_HOME moves all three roots under one directory (tests, sandboxes).
 One rule for every setting: explicit argument, else environment variable,
 else config file, else built-in default. A `.env` file at the repo root or
 in the agent workspace is read once at import and fills in environment
-variables that are not already set (the same as browser-harness): a place
+variables that are not already set: a place
 for per-machine overrides such as PHONE_HARNESS_CLOUD_API, never committed.
 Resolving that workspace creates it from the packaged defaults when the
 directory does not exist; an existing directory is not modified. An

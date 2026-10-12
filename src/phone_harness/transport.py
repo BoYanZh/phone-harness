@@ -6,9 +6,7 @@ which is what lets helpers.py carry no platform knowledge at all: `nav.home`
 means the same thing to an iPhone and a Pixel, though one is a Cmd+1 keystroke
 into a video stream and the other is a KEYCODE_HOME over adb.
 
-This mirrors browser-harness, where helpers.py has no idea whether the browser
-is local or in the cloud because everything funnels through cdp(). Phones have
-no shared wire protocol to funnel through — SkyLight event records and adb have
+Phones have no shared wire protocol — SkyLight event records and adb have
 nothing in common — so the shared layer is this vocabulary instead.
 
     screen.capture      path=None       -> (png_path, bounds)

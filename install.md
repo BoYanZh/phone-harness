@@ -1,61 +1,92 @@
 # phone-harness install
 
-phone-harness drives a real phone (first-run flow for agents: `onboarding.md`;
-day-to-day usage: `SKILL.md`). It works with an **iPhone** through the macOS
-iPhone Mirroring app, an **Android** over adb (USB or Wi‑Fi), or a phone from
-Phone Harness Cloud — an Android over adb, or an iPhone the helpers drive over
-HTTPS (`phone-harness cloud start` with that phone's name from `cloud ls`).
-Same helpers either way; you
-choose a default and can switch per call.
+phone-harness drives a real phone. First-run flow for agents:
+https://github.com/ShawnPana/phone-harness/blob/main/onboarding.md.
+Day-to-day usage is `phone-harness skill`. It works with an **iPhone**
+through the macOS iPhone Mirroring app, an **Android** over adb (USB or
+Wi‑Fi), or a phone from Phone Harness Cloud — an Android over adb, or an
+iPhone the helpers drive over HTTPS (`phone-harness cloud start` with that
+phone's name from `cloud ls`). Same helpers either way; you choose a
+default and can switch per call.
 
-## Common
+## Fast Path
 
 ```bash
-git clone https://github.com/ShawnPana/phone-harness ~/.phone-harness   # canonical home
-cd ~/.phone-harness
-pip install -e .                      # the global `phone-harness` command (pulls pyobjc on macOS only)
-
-# register as an agent skill so Claude Code / Codex reach for it automatically
-mkdir -p ~/.claude/skills/phone-harness
-phone-harness skill > ~/.claude/skills/phone-harness/SKILL.md
-mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills/phone-harness"
-phone-harness skill > "${CODEX_HOME:-$HOME/.codex}/skills/phone-harness/SKILL.md"
+uv tool install --python 3.12 --upgrade --force phone-harness
 ```
 
-- Python 3.10+, any OS. **iPhone Mirroring needs a Mac.** A cloud iPhone
-  (`cloud start` of the iOS catalog entry) is driven over HTTPS from any OS.
-  **Android works on macOS, Linux and Windows** and is the default off a Mac.
-  Only the CLI? `pip install phone-harness` works too. Helpers you add
-  live outside the install, so an upgrade does not wipe them. The
-  directory is `~/.phone-harness/agent-workspace`, unless
-  `~/.phone-harness` is a git checkout (the clone above), in which case
-  it is `~/.local/share/phone-harness/agent-workspace` (`XDG_DATA_HOME`
-  if that is set). The same paths are used on every OS. A checkout of
-  this repo keeps using its own `agent-workspace/`. `PH_AGENT_WORKSPACE`
-  overrides all of these. The first run copies the packaged defaults
-  when that directory does not exist. An existing workspace is left
-  untouched, including a custom `agent_helpers.py`. To get a fresh
-  default, delete the workspace folder; it is recreated on the next run.
+Needs [uv](https://docs.astral.sh/uv/) and Python 3.12. The package itself
+accepts Python 3.10 or newer. **iPhone Mirroring needs a Mac.** A cloud
+iPhone (`cloud start` of the iOS catalog entry) is driven over HTTPS from
+any OS. **Android works on macOS, Linux and Windows** and is the default
+off a Mac.
+
+Register the skill so the agent reaches for it:
+
+```bash
+# Codex
+mkdir -p ${CODEX_HOME:-$HOME/.codex}/skills/phone-harness && phone-harness skill > ${CODEX_HOME:-$HOME/.codex}/skills/phone-harness/SKILL.md
+```
+
+Claude Code and other agents: register a skill named phone-harness with
+`phone-harness skill` as the body plus a short trigger sentence (for
+example, "Use this when the task needs the user's phone.").
+
+Quick check:
+
+```bash
+phone-harness <<'PY'
+ensure_device()
+PY
+```
+
+That reaches the default phone. If it fails, use the sections below.
+
+- Helpers you add live in `~/.phone-harness/agent-workspace`, outside the
+  install, so an upgrade does not wipe them. When `~/.phone-harness` is a
+  git checkout, they live in
+  `~/.local/share/phone-harness/agent-workspace` (`XDG_DATA_HOME` if that
+  is set). The same paths are used on every OS. `PH_AGENT_WORKSPACE`
+  overrides these. The first run copies the packaged defaults when that
+  directory does not exist. An existing workspace is left untouched,
+  including a custom `agent_helpers.py`. To get a fresh default, delete
+  the workspace folder; it is recreated on the next run.
 - The default phone is `phone-harness config set platform ios|android`;
   `phone-harness config` shows every setting and where it came from;
   `PHONE_HARNESS_PLATFORM=android phone-harness …` overrides for one call.
 - `phone-harness --doctor` checks the default phone; `--doctor ios` or
   `--doctor android` checks the other.
-
-Re-run the `phone-harness skill > …/SKILL.md` lines after pulling updates so
-the agent's copy matches the code. `phone-harness update` does the upgrade:
-`uv tool upgrade phone-harness` when this is a uv tool, `git pull --ff-only`
-in a checkout, otherwise it prints `pip install -U phone-harness` and does
-not run it. It never updates on its own. A newer PyPI release is one stderr
-line, at most once a day, and only on a terminal;
-`PHONE_HARNESS_NO_UPDATE_CHECK=1` skips the check.
+- Re-run the skill registration after `phone-harness update` so the
+  agent's copy matches the code. `phone-harness update` does the upgrade:
+  `uv tool upgrade phone-harness` when this is a uv tool, `git pull
+  --ff-only` in a checkout, otherwise it prints `pip install -U
+  phone-harness` and does not run it. It never updates on its own. A
+  newer PyPI release is one stderr line, at most once a day, and only on
+  a terminal; `PHONE_HARNESS_NO_UPDATE_CHECK=1` skips the check.
 - **No phone on your desk?** `phone-harness cloud login`, then
   `phone-harness cloud ls` and `phone-harness cloud start` (the account
   default) or `phone-harness cloud start PHONE` for a catalog id, label, or
   `ios` / `android` when that names one phone. An Android needs adb, below.
   An iPhone needs no adb and no Mac; driving it is **Cloud iPhone** in
-  `SKILL.md`. A start lasts 15 minutes unless you pass `--for` (`90s`, `15m`,
+  the skill. A start lasts 15 minutes unless you pass `--for` (`90s`, `15m`,
   or a number of minutes). New accounts get $5 of credit (100 minutes).
+
+No uv? `pip install phone-harness` works too. Upgrade that install with
+`pip install -U phone-harness` (what `phone-harness update` prints for it).
+
+## Working from a checkout (contributors)
+
+```bash
+git clone https://github.com/ShawnPana/phone-harness ~/.phone-harness
+cd ~/.phone-harness
+pip install -e .
+```
+
+`pip install -e .` pulls pyobjc on macOS only. Register the skill the same
+way as the Fast Path. A checkout uses its own `agent-workspace/`. Because
+that clone sits at `~/.phone-harness`, a separate pip or uv install stores
+helpers in `~/.local/share/phone-harness/agent-workspace` instead of
+writing into the checkout.
 
 ## iPhone
 
@@ -102,7 +133,7 @@ line, at most once a day, and only on a terminal;
 Set up each as above; `phone-harness config set platform …` picks the default,
 `PHONE_HARNESS_PLATFORM=…` picks per call. The desk phones never interfere —
 the iPhone is driven through the mirroring window, the Android over adb. A
-cloud iPhone is a third path: HTTPS ops, covered in `SKILL.md`.
+cloud iPhone is a third path: HTTPS ops, covered in the skill.
 
 `phone-harness config set telemetry false` turns off anonymous usage telemetry.
 
@@ -116,9 +147,10 @@ cloud iPhone is a third path: HTTPS ops, covered in `SKILL.md`.
 - **iPhone — taps do nothing**: Accessibility missing, or another window stole
   focus (helpers re-activate the window; check for a macOS prompt).
 - **iPhone — `--doctor` says pyobjc missing on an install that works**: it is
-  running a different Python than the one that has pyobjc; use the interpreter
-  `pip install -e .` used, or `pip install pyobjc-framework-Quartz
-  pyobjc-framework-Vision pyobjc-framework-Cocoa` for that one.
+  running a different Python than the one that has pyobjc. Re-run the Fast
+  Path command, or use the interpreter `pip install -e .` used in a checkout.
+  Or `pip install pyobjc-framework-Quartz pyobjc-framework-Vision
+  pyobjc-framework-Cocoa` for that interpreter.
 - **Android — `unauthorized`**: unlock the phone and tap Allow on the "Allow
   USB debugging?" prompt (replug if it does not appear).
 - **Android — `no-device`**: USB debugging off, cable/port, or for Wi‑Fi:

@@ -78,11 +78,11 @@ PY
   4. When a check fails, isolate: re-run that one action, look at the screen,
      form one guess, test it. Do not re-run the batch hoping it lands.
   5. Keep what you learn in the agent workspace's `agent_helpers.py`.
-     A checkout uses `agent-workspace/`. A pip or uv install uses
-     `~/.phone-harness/agent-workspace`, or
+     A pip or uv install uses `~/.phone-harness/agent-workspace`, or
      `~/.local/share/phone-harness/agent-workspace` when
      `~/.phone-harness` is a git checkout, so an upgrade does not wipe
-     it. `PH_AGENT_WORKSPACE` overrides that path. The directory is
+     it. A checkout of this repo uses its own `agent-workspace/`.
+     `PH_AGENT_WORKSPACE` overrides that path. The directory is
      created from the defaults only when it is missing. An existing
      workspace is never overwritten. To get a fresh default, delete the
      workspace folder; it is recreated on the next run.
@@ -312,8 +312,8 @@ Trust `GET /ops` when the host's list is shorter than this table.
   button. `shell()` is Unsupported.
 - **Confirm `open_app`.** It sends `apps.launch` and can return with the app
   still not in front. Check with `ocr()` or a screenshot. If it missed,
-  `home()` and tap the icon. `tap_icon()` in
-  `agent-workspace/agent_helpers.py` aims 35 points above the label for the
+  `home()` and tap the icon. `tap_icon()` in the agent workspace's
+  `agent_helpers.py` aims 35 points above the label for the
   mirroring window, so measure this phone's icon yourself.
 
 ## Android
@@ -469,13 +469,15 @@ events into it for hands. All coordinates are global macOS screen points.
   actually happened on screen rather than assuming the event arrived.
 
 For task-specific edits, use the agent workspace's `agent_helpers.py`:
-`agent-workspace/` in a checkout, `~/.phone-harness/agent-workspace` for
-a pip or uv install (or `~/.local/share/phone-harness/agent-workspace`
-when `~/.phone-harness` is a git checkout). `PH_AGENT_WORKSPACE`
-overrides that. Installs seed that directory from the packaged defaults
-when it does not exist yet; an existing workspace is left as it is.
-To get a fresh default, delete the workspace folder; it is recreated
-on the next run. For setup or permission problems, read `install.md`.
+`~/.phone-harness/agent-workspace` for a pip or uv install (or
+`~/.local/share/phone-harness/agent-workspace` when `~/.phone-harness`
+is a git checkout). A checkout of this repo uses its own
+`agent-workspace/`. `PH_AGENT_WORKSPACE` overrides that. Installs seed
+that directory from the packaged defaults when it does not exist yet;
+an existing workspace is left as it is. To get a fresh default, delete
+the workspace folder; it is recreated on the next run. For setup or
+permission problems, read
+https://github.com/ShawnPana/phone-harness/blob/main/install.md.
 
 ## Updates
 

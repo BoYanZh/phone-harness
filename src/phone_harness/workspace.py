@@ -48,9 +48,9 @@ def _is_git_checkout(path):
 def _user_agent_workspace():
     """Per-user workspace, never inside an install prefix.
 
-    ``~/.phone-harness`` is the canonical clone (see install.md). When that
-    path is a checkout, its ``agent-workspace/`` belongs to the checkout;
-    an install uses the data directory instead of writing into the clone.
+    When ``~/.phone-harness`` is a git checkout, its ``agent-workspace/``
+    belongs to that checkout. An install uses the data directory instead
+    of writing into it.
     """
     canonical = Path.home() / ".phone-harness"
     if not _is_git_checkout(canonical):

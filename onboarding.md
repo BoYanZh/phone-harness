@@ -84,5 +84,6 @@ in the summary and move on. If yes:
 Never type a PIN. Never change a phone setting without asking. Never sign the
 user up for anything or spend their cloud credit beyond the proof. Connecting
 the phone is the user's job — relay the doctor's message and wait; don't
-retry-loop. After this, day-to-day usage is `SKILL.md`; setup reference and
-troubleshooting are `install.md`.
+retry-loop. After this, day-to-day usage is the phone-harness skill.
+Setup reference and troubleshooting:
+https://github.com/ShawnPana/phone-harness/blob/main/install.md.

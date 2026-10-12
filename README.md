@@ -34,7 +34,7 @@ https://github.com/user-attachments/assets/80b6d38e-0222-481c-93db-9de60d79247a
 Paste into Claude Code or Codex:
 
 ```text
-Set up phone-harness for me. Clone https://github.com/ShawnPana/phone-harness into ~/.phone-harness, read `install.md` first, install it so `phone-harness` is a command on my PATH, and register it as an agent skill named phone-harness using `phone-harness skill` as the body. Then read `onboarding.md` and walk me through it.
+Install or upgrade phone-harness to the latest stable version with uv using Python 3.12, register the skill from `phone-harness skill`, then read https://github.com/ShawnPana/phone-harness/blob/main/onboarding.md and walk me through it. Follow https://github.com/ShawnPana/phone-harness/blob/main/install.md if setup or connection fails.
 ```
 
 The agent asks which phone is your default and walks you through the parts
@@ -63,11 +63,11 @@ phone-harness --version
 
 Helpers are pre-imported. [SKILL.md](SKILL.md) is the agent's day-to-day
 guide; [helpers.py](src/phone_harness/helpers.py) is the full list.
-Task-specific helpers live in `agent-workspace/agent_helpers.py` in a
-checkout. A pip or uv install uses `~/.phone-harness/agent-workspace`
-(see [install.md](install.md)), creates it from the packaged defaults
-when it is missing, and never overwrites an existing one. Delete that
-folder for a fresh default; the next run recreates it.
+Task-specific helpers live in `~/.phone-harness/agent-workspace`
+(see [install.md](install.md)). The first run creates that folder from
+the packaged defaults and never overwrites an existing one. Delete the
+folder for a fresh default; the next run recreates it. A checkout uses
+its own `agent-workspace/` instead.
 
 ## No phone on your desk? Rent one
 
