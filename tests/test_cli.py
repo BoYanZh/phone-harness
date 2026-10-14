@@ -472,7 +472,8 @@ class TelemetryDefault(unittest.TestCase):
 
         with mock.patch.dict(os.environ, {"PHONE_HARNESS_HOME": home.name}, clear=False):
             os.environ.pop("PHONE_HARNESS_TELEMETRY", None)
-            # GitHub Actions sets CI=true. This test is the non-CI default.
+            # GitHub Actions sets CI=true, and this repo's workflow sets
+            # PHONE_HARNESS_TELEMETRY=0. This test is the ordinary default.
             os.environ.pop("CI", None)
             self.assertEqual(lookup("telemetry"), (True, "default"))
             self.assertTrue(get("telemetry"))

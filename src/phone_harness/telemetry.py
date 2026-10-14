@@ -4,8 +4,7 @@ One `cli_event` per CLI invocation, sent to PostHog from a detached helper
 process so the CLI never blocks on the network.
 
 Off: `phone-harness config set telemetry false`, or PHONE_HARNESS_TELEMETRY=0
-for one call. A run in CI does not send telemetry. The install id lives in
-the state dir; see config.py.
+for one call. The install id lives in the state dir; see config.py.
 """
 
 from __future__ import annotations
@@ -31,21 +30,7 @@ def _version() -> str:
         return ""
 
 
-def _in_ci() -> bool:
-    """GitHub Actions, GitLab, CircleCI, and others set CI=true.
-
-    Empty, 0, and false are not CI. Anything else set on CI is.
-    """
-    value = os.environ.get("CI")
-    if value is None:
-        return False
-    return value.strip().lower() not in ("", "0", "false")
-
-
 def is_enabled() -> bool:
-    # CI never sends. An explicit opt-in does not turn it back on.
-    if _in_ci():
-        return False
     return bool(_config.get("telemetry"))
 
 

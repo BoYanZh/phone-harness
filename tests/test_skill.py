@@ -25,6 +25,7 @@ class SkillOutput(unittest.TestCase):
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "cp1252:strict"
         env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
+        env["PHONE_HARNESS_TELEMETRY"] = "0"
         env.pop("BROWSER", None)
         r = subprocess.run(
             [sys.executable, "-m", "phone_harness.run", "skill"],
