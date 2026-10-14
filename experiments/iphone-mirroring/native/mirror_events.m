@@ -4,24 +4,15 @@
 #import <unistd.h>
 #import <time.h>
 #import <errno.h>
-#import <fcntl.h>
 // Experimental, build-dependent private event ABI. No global post or cursor warp.
 typedef struct {uint32_t high,low;} PSN;
 static void die(const char *s){fprintf(stderr,"%s\n",s);exit(1);}
-static void focusTrace(NSString *label,NSString *action,pid_t pid,CGWindowID wid,int edge,int result){
- const char *path=getenv("PH_FOCUS_ACTION_LOG");if(!path||!*path)return;
- const char *parent=getenv("PH_FOCUS_PARENT");
- NSDictionary *row=@{@"time_ns":@((long long)([NSDate date].timeIntervalSince1970*1e9)),@"kind":@"native_call",@"label":label,@"action":action,@"pid":@(getpid()),@"target_pid":@(pid),@"window":@(wid),@"edge":@(edge),@"result":@(result),@"parent":parent?@(parent):@""};
- NSMutableData *data=[[NSJSONSerialization dataWithJSONObject:row options:0 error:nil] mutableCopy];[data appendBytes:"\n" length:1];
- int fd=open(path,O_WRONLY|O_CREAT|O_APPEND,0600);if(fd>=0){ssize_t written=write(fd,data.bytes,data.length);(void)written;close(fd);}
-}
 static double coordinate(const char *s){char *end;errno=0;double x=strtod(s,&end);if(errno||end==s||*end||!isfinite(x)||x<0||x>1)die("Coordinates must be finite numbers in [0,1].");return x;}
 static BOOL windowBoundsOnScreen(CGWindowID wid,CGRect *bounds){
  NSArray *windows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly,kCGNullWindowID));
  for(NSDictionary *w in windows)if([w[(__bridge NSString *)kCGWindowNumber] unsignedIntValue]==wid){CGRect r;if(!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(__bridge NSString *)kCGWindowBounds],&r))return NO;if(bounds)*bounds=r;return YES;}
  return NO;
 }
-static BOOL windowOnScreen(CGWindowID wid){return windowBoundsOnScreen(wid,NULL);}
 static BOOL cursorOverWindow(CGWindowID wid){
  CGEventRef sample=CGEventCreate(NULL);CGPoint point=CGEventGetLocation(sample);CFRelease(sample);
  NSArray *windows=CFBridgingRelease(CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly|kCGWindowListExcludeDesktopElements,kCGNullWindowID));
@@ -29,8 +20,8 @@ static BOOL cursorOverWindow(CGWindowID wid){
  return NO;
 }
 int main(int argc,char **argv){@autoreleasepool{
- if(argc<2)die("Usage: mirror_events info | tap X Y | home|app-switcher|spotlight | scroll|magnify|rotate|translate|swipe DELTA [--send] [--pid-route|--minimal-record (tap only)] [--activate] [--sender ID] [--at X Y] [--prime-position|--prime-tap] [--tracking-region ID] [--no-phase] [--gesture-series] [--probe-target] [--double (tap only)] [--horizontal (scroll only)] [--no-front]");
- NSString *action=@(argv[1]); BOOL send=NO,pidRoute=NO,hasSender=NO,probeTarget=NO,primePosition=NO,primeTap=NO,hasAt=NO,noPhase=NO,gestureSeries=NO,activate=NO,minimalRecord=NO,doubleTap=NO,horizontal=NO,noFront=NO; int64_t sender=0;double atX=.5,atY=.55;
+ if(argc<2)die("Usage: mirror_events info | tap X Y | home|app-switcher|spotlight | scroll|magnify|rotate|translate|swipe DELTA [--send] [--pid-route|--minimal-record (tap only)] [--activate] [--sender ID] [--at X Y] [--prime-position|--prime-tap] [--tracking-region ID] [--no-phase] [--gesture-series] [--double (tap only)] [--horizontal (scroll only)] [--no-front]");
+ NSString *action=@(argv[1]); BOOL send=NO,pidRoute=NO,hasSender=NO,primePosition=NO,primeTap=NO,hasAt=NO,noPhase=NO,gestureSeries=NO,activate=NO,minimalRecord=NO,doubleTap=NO,horizontal=NO,noFront=NO; int64_t sender=0;double atX=.5,atY=.55;
  int64_t trackingRegion=0;
  BOOL info=[action isEqual:@"info"];
  BOOL tapAction=[action isEqual:@"tap"],systemAction=[@[@"home",@"app-switcher",@"spotlight"] containsObject:action];
@@ -44,7 +35,6 @@ int main(int argc,char **argv){@autoreleasepool{
   else if(!strcmp(argv[i],"--double")&&!doubleTap)doubleTap=YES;
   else if(!strcmp(argv[i],"--horizontal")&&!horizontal)horizontal=YES;
   else if(!strcmp(argv[i],"--no-front")&&!noFront)noFront=YES;
-  else if(!strcmp(argv[i],"--probe-target")&&!probeTarget)probeTarget=YES;
   else if(!strcmp(argv[i],"--prime-position")&&!primePosition)primePosition=YES;
   else if(!strcmp(argv[i],"--prime-tap")&&!primeTap)primeTap=YES;
   else if(!strcmp(argv[i],"--no-phase")&&!noPhase)noPhase=YES;
@@ -79,8 +69,8 @@ int main(int argc,char **argv){@autoreleasepool{
  if(systemAction&&hasAt)die("Navigation does not take a position.");
  if(noPhase&&![action isEqual:@"scroll"])die("--no-phase applies only to scroll.");
  if(gestureSeries&&![ @[@"magnify",@"rotate",@"translate"] containsObject:action])die("--gesture-series applies only to magnify, rotate or translate.");
- NSString *bundle=probeTarget?@"local.mirroring.EventProbe":@"com.apple.ScreenContinuity";
- NSString *title=probeTarget?@"Mirroring Event Probe":@"iPhone Mirroring";
+ NSString *bundle=@"com.apple.ScreenContinuity";
+ NSString *title=@"iPhone Mirroring";
  NSArray *apps=[NSRunningApplication runningApplicationsWithBundleIdentifier:bundle];
  if(apps.count!=1)die("Expected one running iPhone Mirroring app.");
  pid_t pid=((NSRunningApplication *)apps[0]).processIdentifier;CGWindowID wid=0;CGRect b=CGRectZero;int matches=0;
@@ -103,14 +93,11 @@ int main(int argc,char **argv){@autoreleasepool{
  int(*front)(PSN*,uint32_t,uint32_t)=dlsym(sky,"_SLPSSetFrontProcessWithOptions");
  int(*post)(PSN*,void*)=dlsym(sky,"SLPSPostEventRecordTo");
  if(!getRecord||!setWindowLocation||!getPSN||!front||!post)die("Private APIs unavailable.");
- CGEventRef sample=CGEventCreate(NULL);CGPoint before=CGEventGetLocation(sample);CFRelease(sample);
  PSN psn={0};if(getPSN(pid,&psn))die("Could not address target process.");
  if(send&&activate){
   // Private front-process preparation can report "active" on another Space.
   // Always request normal activation and verify the actual target window too.
-  focusTrace(@"activate.begin",action,pid,wid,-1,0);
   [(NSRunningApplication *)apps[0] activateWithOptions:NSApplicationActivateAllWindows];
-  focusTrace(@"activate.end",action,pid,wid,-1,0);
   NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:2];
   CGRect prior=CGRectNull,current;int stable=0;
   while(deadline.timeIntervalSinceNow>0){
@@ -122,7 +109,7 @@ int main(int argc,char **argv){@autoreleasepool{
   }
   if(stable<4)die("Target did not become active with stable on-screen window bounds; no events sent.");
  }
- if(send&&!activate&&!noFront){focusTrace(@"front.prepare.begin",action,pid,wid,-1,0);int status=front(&psn,wid,0x200);focusTrace(@"front.prepare.end",action,pid,wid,-1,status);if(status)die("Could not prepare target.");}
+ if(send&&!activate&&!noFront){int status=front(&psn,wid,0x200);if(status)die("Could not prepare target.");}
  int errors=0,count=tapAction?(doubleTap?4:2):(systemAction?2:14),primeCount=primeTap?2:(primePosition?1:0),builtCount=0;BOOL trackingExitSkipped=NO;
  for(int i=-primeCount-(gestureSeries?1:0)-(trackingRegion?1:0);i<count+(gestureSeries?1:0)+(trackingRegion?1:0);i++){
   int phase=i==0?1:(i==count-1?4:2);double delta=(i==0||i==count-1)?0:value/(count-2);CGEventRef e;
@@ -185,15 +172,12 @@ int main(int argc,char **argv){@autoreleasepool{
    memcpy(record+0x10,&global,sizeof(global));memcpy(record+0x20,&local,sizeof(local));
   }
   if(send){
-   if(minimalRecord&&!noFront){focusTrace(@"front.edge.begin",action,pid,wid,i,0);int status=front(&psn,wid,0x200);focusTrace(@"front.edge.end",action,pid,wid,i,status);if(status)die("Could not prepare target for tap edge.");}
-   focusTrace(pidRoute?@"post.pid.begin":@"post.record.begin",action,pid,wid,i,0);
+   if(minimalRecord&&!noFront){int status=front(&psn,wid,0x200);if(status)die("Could not prepare target for tap edge.");}
    int status=0;if(pidRoute)CGEventPostToPid(pid,e);else{status=post(&psn,record);if(status)errors++;}
-   focusTrace(pidRoute?@"post.pid.end":@"post.record.end",action,pid,wid,i,status);
   }
   builtCount++;CFRelease(e);if(send)usleep(trackingEvent&&i<0?100000:(minimalRecord?50000:16000));
  }
- sample=CGEventCreate(NULL);CGPoint after=CGEventGetLocation(sample);CFRelease(sample);
- NSDictionary *result=@{@"action":action,@"delta":@(value),@"submitted":@(send),@"verified":@NO,@"route":pidRoute?@"pid":@"record",@"pid":@(pid),@"window":@(wid),@"sender":@(sender),@"prime_position":@(primePosition),@"prime_tap":@(primeTap),@"no_phase":@(noPhase),@"gesture_series":@(gestureSeries),@"tracking_region":@(trackingRegion),@"tracking_exit_skipped":@(trackingExitSkipped),@"at":@[@(atX),@(atY)],@"events":@(builtCount),@"dispatch_errors":@(errors),@"cursor_before":@[@(before.x),@(before.y)],@"cursor_after":@[@(after.x),@(after.y)]};
- NSMutableDictionary *out=[result mutableCopy];out[@"pointer_encoding"]=minimalRecord?@"minimal-record":@"generated";out[@"target_is_active"]=@((BOOL)([NSWorkspace sharedWorkspace].frontmostApplication.processIdentifier==pid));out[@"target_window_onscreen"]=@(windowOnScreen(wid));out[@"activate_requested"]=@(activate);out[@"double"]=@(doubleTap);out[@"horizontal"]=@(horizontal);out[@"no_front"]=@(noFront);
+ NSDictionary *result=@{@"action":action,@"delta":@(value),@"submitted":@(send),@"verified":@NO,@"route":pidRoute?@"pid":@"record",@"pid":@(pid),@"window":@(wid),@"sender":@(sender),@"prime_position":@(primePosition),@"prime_tap":@(primeTap),@"no_phase":@(noPhase),@"gesture_series":@(gestureSeries),@"tracking_region":@(trackingRegion),@"tracking_exit_skipped":@(trackingExitSkipped),@"at":@[@(atX),@(atY)],@"events":@(builtCount),@"dispatch_errors":@(errors)};
+ NSMutableDictionary *out=[result mutableCopy];out[@"pointer_encoding"]=minimalRecord?@"minimal-record":@"generated";out[@"activate_requested"]=@(activate);out[@"double"]=@(doubleTap);out[@"horizontal"]=@(horizontal);out[@"no_front"]=@(noFront);
  NSData *data=[NSJSONSerialization dataWithJSONObject:out options:NSJSONWritingSortedKeys error:nil];puts([[NSString alloc]initWithData:data encoding:NSUTF8StringEncoding].UTF8String);return errors?1:0;
 }}

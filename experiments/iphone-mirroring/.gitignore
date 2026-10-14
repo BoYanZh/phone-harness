@@ -1,6 +1,2 @@
 /output/
 /native/mirror_events
-/native/list_hid_services
-*.jsonl
-*.png
-*.log
