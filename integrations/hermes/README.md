@@ -50,7 +50,7 @@ covers each.
   - Plugin setting `classifier_auto_run` (boolean, default false).
   - Or export `PHONE_HARNESS_CLASSIFIER_AUTO_RUN=1` in the environment Hermes
     runs in. When that variable is set, it wins over the plugin setting.
-- Telemetry is off for Hermes runs unless you opt in with `phone-harness config set telemetry true`.
+- Telemetry is off for Hermes runs unless you opt in with `phone-harness config set telemetry true`. Runs in CI do not send telemetry.
 - `PHONE_HARNESS_PLATFORM`, when you have exported it, is passed through.
 - The agent workspace is one folder, `agent-workspace`, in Hermes's plugin
   data directory. If `PH_AGENT_WORKSPACE` is already set, that path is used
@@ -69,7 +69,7 @@ covers each.
    After 120 s the tool reports the phone as busy.
 4. The plugin pipes the script on stdin to the phone-harness Hermes installed,
    with `PH_AGENT_WORKSPACE` and `PH_CLIENT=hermes`. It does not set a platform.
-   Telemetry is off for Hermes runs unless you opt in with `phone-harness config set telemetry true`.
+   Telemetry is off for Hermes runs unless you opt in with `phone-harness config set telemetry true`. Runs in CI do not send telemetry.
 5. The result is what the script printed, plus the exit code and the tail of
    stderr. `screenshot()` prints the path it saved. The last absolute PNG,
    JPEG, or WebP path in that output that exists and was written during the

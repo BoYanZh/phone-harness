@@ -463,6 +463,9 @@ class TelemetryOptIn(Base):
         self.saved = dict(os.environ)
         os.environ["PHONE_HARNESS_HOME"] = str(self.data)
         os.environ.pop("PHONE_HARNESS_TELEMETRY", None)
+        # GitHub Actions sets CI=true. These checks are the non-CI opt-in rules,
+        # including the child process that would otherwise inherit CI and not send.
+        os.environ.pop("CI", None)
         self.addCleanup(self.restore_env)
 
     def restore_env(self):
