@@ -522,3 +522,23 @@ class DoctorSuggestsCloud(unittest.TestCase):
                 contextlib.redirect_stdout(out):
             self.assertEqual(admin.run_doctor("android"), 0)
         self.assertNotIn("cloud login", out.getvalue())
+
+
+class DoctorNamesTheHostApp(unittest.TestCase):
+    def test_outermost_app_is_named(self):
+        from phone_harness import admin
+        chain = {50: "40 /bin/zsh", 40: "30 /Applications/Helper.app/Contents/MacOS/Helper",
+                 30: "1 /Applications/Agent.app/Contents/MacOS/Agent"}
+
+        def fake(cmd, **kw):
+            return mock.Mock(stdout=chain[int(cmd[-1])])
+        with mock.patch.object(admin.os, "getppid", return_value=50), \
+                mock.patch.object(admin.subprocess, "run", fake):
+            self.assertEqual(admin._host_app(), '"Agent"')
+
+    def test_no_app_falls_back(self):
+        from phone_harness import admin
+        with mock.patch.object(admin.os, "getppid", return_value=50), \
+                mock.patch.object(admin.subprocess, "run",
+                                  lambda cmd, **kw: mock.Mock(stdout="1 /bin/zsh")):
+            self.assertIn("terminal or agent app", admin._host_app())

@@ -128,7 +128,7 @@ cloud iPhone is a third path: HTTPS ops, covered in the skill.
 local check fails it also points at the cloud. Common ones:
 
 - **iPhone — capture is blank/black**: Screen Recording granted but the
-  terminal wasn't restarted; or Mirroring shows an interstitial (iPhone in Use /
+  app that runs your commands wasn't restarted; or Mirroring shows an interstitial (iPhone in Use /
   Connect / Mac Locked) — clear it on the Mac, lock the iPhone if it says in use.
 - **iPhone — taps do nothing**: Accessibility missing, or another window stole
   focus (helpers re-activate the window; check for a macOS prompt).

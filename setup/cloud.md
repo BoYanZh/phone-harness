@@ -32,8 +32,10 @@ Never sign up, join or approve for the user.
 
 ```bash
 phone-harness cloud ls             # phones on the account
-phone-harness cloud start ios      # or: android, an id, or a label
-phone-harness doctor               # checks the attached phone
+phone-harness cloud start PHONE    # an id or label from `cloud ls`; `ios`/`android` when only one matches
+phone-harness <<'PY'               # checks the attached phone
+print(ensure_device())
+PY
 phone-harness cloud stop           # ends the session
 ```
 

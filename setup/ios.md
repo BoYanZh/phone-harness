@@ -14,6 +14,8 @@ Drives the user's own iPhone through the Mac's iPhone Mirroring window.
   - **Accessibility**: taps and typing. Takes effect at once.
   - **Screen Recording**: seeing the phone. Takes effect after that app
     restarts.
+  macOS asks about the outermost app, not Python itself; `phone-harness
+  doctor ios` prints its name when a permission is missing.
 
 ```bash
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"

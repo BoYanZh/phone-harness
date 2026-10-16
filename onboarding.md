@@ -28,9 +28,10 @@ Works through the macOS iPhone Mirroring app. Two things only the user can do:
 
 - Pair iPhone Mirroring with the phone once (open the app; the pairing prompts
   need the physical phone).
-- Grant the terminal **Accessibility** and **Screen Recording** in System
-  Settings → Privacy & Security (Screen Recording takes effect after the
-  terminal restarts).
+- Grant **Accessibility** and **Screen Recording** in System Settings →
+  Privacy & Security to the app that runs your commands (a terminal, or your
+  own agent app). `phone-harness doctor ios` names that app. Screen Recording
+  takes effect after that app restarts.
 
 Check first — `phone-harness doctor ios` — and only ask for what is missing.
 Whenever you capture or verify the screen, bring the Mirroring window forward
