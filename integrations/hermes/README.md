@@ -102,8 +102,8 @@ is still the skill's consent rule: the agent asks you before those.
 - Runs model-written Python locally through the phone-harness Hermes installed.
 - Taps and types into your real phone, with your apps and accounts.
 - Screenshots are PNG files in the system temp folder.
-- A cloud phone streams its screen to Phone Harness Cloud, bills by the minute,
-  and uses phone-harness's own cloud sign-in.
+- A cloud phone streams its screen to Phone Harness Cloud and uses phone-harness's own cloud sign-in.
+  A cloud Android bills by the minute; a cloud iPhone does not.
 - Hermes adds the plugin's toolset to every platform that has a saved tool
   selection, messaging platforms included. Turn it off there with
   `hermes tools` unless you want people who can message your bot to drive your

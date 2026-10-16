@@ -41,7 +41,7 @@ The agent asks which phone is your default and walks you through the parts
 that need your hands: pairing iPhone Mirroring and granting Accessibility and
 Screen Recording, or turning on Android developer options and approving adb.
 It also offers a cloud Android — the same helpers with nothing to pair, and
-the first 100 minutes free — so an iPhone user can test on Android too.
+the first 100 minutes free; only cloud Android bills by the minute — so an iPhone user can test on Android too.
 `phone-harness --doctor` checks the chain. Details in [install.md](install.md).
 
 **Hermes Agent:** `hermes plugins install ShawnPana/phone-harness/integrations/hermes`
@@ -79,7 +79,7 @@ phone-harness cloud start ios        # the account's iPhone, when only one is li
 phone-harness <<'PY'
 print(screenshot())
 PY
-phone-harness cloud stop             # billing stops; a saved Android is written back
+phone-harness cloud stop             # ends the session; a saved Android is written back
 ```
 
 `cloud ls` is the catalog (`GET /me` → `available`): each phone's label,

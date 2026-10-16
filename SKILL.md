@@ -198,7 +198,7 @@ phone-harness cloud start "Temporary phone" --for 90s
 phone-harness --session SID <<'PY'           # this process only; or PHONE_HARNESS_SESSION
 print(screen_info())
 PY
-phone-harness cloud stop                     # ends billing; returns at once
+phone-harness cloud stop                     # ends the session; returns at once
 phone-harness cloud phone                    # the saved Android's stored state
 phone-harness cloud watch                    # reopen the read-only live view (--print to share)
 phone-harness cloud open                     # the dashboard: the user takes the controls
@@ -211,8 +211,9 @@ phone-harness cloud open                     # the dashboard: the user takes the
   `cloud use` rewrites that shared fallback. Parallel agents should pass
   `--session` and leave `cloud use` alone, or they will steal the fallback
   from each other.
-- **It bills by the minute while it is up.** Start it once and keep it for the
-  whole conversation. Stop it when the user is done, and say that you did.
+- **A cloud Android bills by the minute while it is up; a cloud iPhone does
+  not.** Start it once and keep it for the whole conversation. Stop an Android
+  when the user is done, and say that you did. An iPhone can stay running.
   `--for` is the length: `90s`, `15m` / `15min`, or a bare number of minutes.
   Default 15, cap 30 (`cloud.minutes`, `cloud.max_minutes`).
 - **Stop before the deadline; a session cannot be extended.** One that simply
@@ -269,15 +270,16 @@ A ready session carries `control: {url, token, expires_at}` and no `adb`.
 From then on the helpers drive it over HTTPS. This machine needs no adb, no
 shell, and no Mac. It is a phone granted to the user's account and kept
 between sessions - not the personal iPhone mirrored on the Mac, which is a
-different device with its own apps and logins. `cloud stop` ends billing
-and returns at once; the phone keeps its own data. There is no Android-style
+different device with its own apps and logins. It does not bill by the
+minute, so there is no need to stop it to save credit, or to ask before
+starting it. `cloud stop` returns at once; the phone keeps its own data. There is no Android-style
 disk save, and nothing on this phone for `cloud phone` to wipe.
 
 An Android session can stay up beside it. Target one with `--session SID`.
 `cloud use SID` only changes the terminal fallback.
 
-Length, billing, `ls`, `watch`, and `stop` are the **Cloud phones** commands
-above. An iPhone session reports `billing_mode: disabled`. Run scripts as
+Length, `ls`, `watch`, and `stop` are the **Cloud phones** commands
+above. An iPhone session reports `billing_mode: disabled`: no per-minute charge. Run scripts as
 plain `phone-harness` (with `--session` when you must pin one).
 `PHONE_HARNESS_PLATFORM=...` selects a local backend and skips the attached
 cloud phone.
