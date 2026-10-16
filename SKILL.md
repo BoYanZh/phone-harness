@@ -46,6 +46,9 @@ no hardware and is always the fallback.
 - `type_text(text, delay=0.03, keystrokes=False)` - Type into the focused field.
 - `press(combo)` - Press a key, such as `press("enter")`.
 - `open_app(name)` - Launch an app and return the app id that launched.
+- `open_url(url)` - Open an https link in the phone's browser, whole. Cloud phones only for now.
+- `push_file(path)` - Send a file to the phone; it opens in the phone's browser under its own name. Cloud phones only for now.
+- `pull_file(out_dir=".", timeout=300)` - The phone's browser opens an upload page; what is sent there is downloaded into `out_dir`. Returns `{path, size, sha256, content_type}`. Cloud phones only for now.
 - `swipe(direction, distance=0.4, at=None)` - Flick. `direction` is finger motion: `"up"`, `"down"`, `"left"`, or `"right"`.
 - `scroll(direction="down", amount=0.3, at=None)` - Scroll. `direction` is the content to reveal: `"down"`, `"up"`, `"left"`, or `"right"`.
 - `scroll_screen(direction="down", amount=0.6, settle=2.5, moved_thresh=None, at=None)` - One scroll, then the text on screen before and after.
@@ -346,61 +349,25 @@ Trust `GET /ops` when the host's list is shorter than this table.
 ### Files on a cloud iPhone
 
 There is no shell, so bytes move through storage links the service signs and
-the phone's `url.open` op. Two commands wrap it; both take `--session SID`.
+the phone's `url.open` op. Three helpers wrap it, and they follow the
+attached session (or `--session`) like every other helper.
 
-- `phone-harness push FILE` uploads FILE and opens it in the phone's
-  browser under its own name (a JPEG shows as an image, an MP4 plays). From
-  there the phone's own UI decides what to do with it; look at the screen and
-  act on what is there, as with any other task.
-- `phone-harness pull [--out DIR]` opens a one-page upload form in the
+- `push_file(path)` uploads the file and opens it in the phone's browser
+  under its own name (a JPEG shows as an image, an MP4 plays). From there
+  the phone's own UI decides what to do with it; look at the screen and act
+  on what is there, as with any other task.
+- `pull_file(out_dir=".", timeout=300)` opens a one-page upload form in the
   phone's browser and waits. Whoever is driving the phone picks a file on
-  that page and sends it; the command then downloads it and prints the local
-  path, size and sha256 as JSON.
-- `open_url(url)` is the helper behind both: any https link, opened whole,
-  with no typing and no clipboard. Check `supports('url.open')` first; an
-  older host lists no such op.
+  that page and sends it; the helper downloads it, prints the local path,
+  and returns path, size and sha256.
+- `open_url(url)` is the op behind both: any https link, opened whole, with
+  no typing and no clipboard. Check `supports('url.open')` first; an older
+  host lists no such op.
 
-Links expire within fifteen minutes and with the session; the files are
-removed when the session ends. A link is a credential: do not paste one into
-notes or output.
-
-
-- **Coordinates are `screen.bounds`.** `tap(x, y)`, `find_window()`,
-  `send("screen.require")`, and centres from `screen()` all use that space:
-  `{x, y, w, h, id}`. A point read off the PNG goes through
-  `tap_image_point()` once `screen_info()` returns `img_px`. Otherwise tap
-  a centre from `screen()`.
-- **`screen_info()`, `image_point()`, and `tap_image_point()` measure the
-  PNG** so a point you read off a screenshot can become a tap. If
-  `screen_info()` raises `ModuleNotFoundError: No module named 'Quartz'`,
-  that helper imported the macOS Vision module to read the PNG's pixel size.
-  `screen()` sends `screen.text` to the host and still works - keep using
-  `tap_text()`. If `screen_info()` returns `img_px`, those three helpers work
-  on any OS. [PR #108](https://github.com/ShawnPana/phone-harness/pull/108)
-  ("screen_info() no longer needs macOS") is the change that reads the PNG
-  header instead of importing Quartz; until `screen_info()` returns `img_px`
-  off a Mac, treat the Quartz error as those three helpers only.
-- **`type_text()` types into the focused field.** Tap the field first. Text
-  sent before the field has focus goes nowhere, so check with `screen()`
-  afterwards.
-- **Act, then look.** One action, then `screen()` or `screenshot()`, then the
-  next. Do not `wait(n)` for a screen to load. The client allows
-  `screen.capture` 60s, `apps.launch` and `apps.list` 90s, and `input.text`
-  the timeout in the table.
-- **Errors the client raises.** HTTP 400 with `unsupported: true` raises
-  `Unsupported` (retrying will not help). HTTP 404 raises `RuntimeError`:
-  the session is gone or the grant expired. Any other HTTP status raises
-  `RuntimeError` with the host's `error` string. Create-time
-  `device_unavailable`, `profile_running`, and `phones_busy` happen on
-  `cloud start`, before any op, and are described under **Cloud phones**.
-- **`ui()`, `back()`, and `current_app()` raise Unsupported** when the host
-  does not list `tree`, `nav.back`, and `apps.current`. `home()` is the Home
-  button. `shell()` is Unsupported.
-- **Confirm `open_app`.** It sends `apps.launch` and can return with the app
-  still not in front. Check with `screen()` or a screenshot. If it missed,
-  `home()` and tap the icon. `tap_icon()` in the agent workspace's
-  `agent_helpers.py` aims 35 points above the label for the
-  mirroring window, so measure this phone's icon yourself.
+On a local phone all three raise `Unsupported` ("cloud phones only for
+now"). Links expire within fifteen minutes and with the session; the files
+are removed when the session ends. A link is a credential: do not paste one
+into notes or output.
 
 ## Android
 

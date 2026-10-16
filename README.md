@@ -81,8 +81,6 @@ phone-harness cloud start ios        # the account's iPhone, when only one is li
 phone-harness <<'PY'
 print(screenshot())
 PY
-phone-harness push photo.jpg         # a cloud iPhone opens the file in its browser
-phone-harness pull                   # the phone shows an upload page; what is sent lands here
 phone-harness cloud stop             # ends the session; a saved Android is written back
 ```
 
@@ -100,7 +98,7 @@ service gives an unnamed start, a temporary Android. A name is a catalog id or l
 is reached over adb, so every helper works on it unchanged. A cloud iPhone has
 no shell: the helpers POST ops over HTTPS, OCR runs on the host, and driving
 it is in [SKILL.md](SKILL.md). `phone-harness cloud` lists the rest, including
-`watch`, `open`, `history`, and `phone` for the saved Android. `--session SID`
+`watch`, `open`, `history`, and `phone` for the saved Android. Files move with the `push_file(path)` and `pull_file()` helpers (cloud iPhone only for now). `--session SID`
 (or `PHONE_HARNESS_SESSION`) pins one rented phone for this process.
 
 ## Updates

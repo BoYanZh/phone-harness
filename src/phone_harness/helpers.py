@@ -576,9 +576,26 @@ def open_app(name):
 
 
 def open_url(url):
-    """Open an https link in the phone's browser; the link arrives whole.
-    Unsupported where the phone has no such path (check supports('url.open'))."""
+    """Open an https link in the phone's browser; the link arrives whole, with
+    no typing and no clipboard. Cloud phones only for now."""
+    if not phone.supports("url.open"):
+        raise transport.Unsupported("cloud phones only for now: open_url needs a cloud phone whose host can open links")
     return phone.send("url.open", url=url)
+
+
+def push_file(path):
+    """Send a file to the phone: it opens in the phone's browser under its own
+    name. Cloud phones only for now. Returns {filename, size, content_type, expires_at}."""
+    from . import transfer
+    return transfer.push_file(path, phone)
+
+
+def pull_file(out_dir=".", timeout=300):
+    """The phone's browser opens an upload page; pick a file there and this
+    downloads it into `out_dir`, printing the path. Cloud phones only for now.
+    Returns {path, size, sha256, content_type}."""
+    from . import transfer
+    return transfer.pull_file(phone, out_dir=out_dir, timeout=timeout)
 
 
 def current_app():

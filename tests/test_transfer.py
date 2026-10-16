@@ -1,5 +1,5 @@
-"""push and pull: the file routes, a storage link each way, and the phone's
-url.open. No cloud: the API, the phone and the store are stand-ins."""
+"""push_file and pull_file: the file routes, a storage link each way, and the
+phone's url.open. No cloud: the API, the phone and the store are stand-ins."""
 import hashlib
 import io
 import json
@@ -15,6 +15,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from phone_harness import cloud, transfer  # noqa: E402
+from phone_harness.transport import Unsupported  # noqa: E402
 
 
 class Store(BaseHTTPRequestHandler):
@@ -64,7 +65,7 @@ class Transfer(unittest.TestCase):
             self.calls.append((method, path, body))
             return self.api_replies[(method, path)]
         self.p = [mock.patch.object(cloud, "attached", lambda kind=None: sess), mock.patch.object(cloud, "_api", api),
-                  mock.patch.object(transfer, "Remote", lambda url, token: self.phone), mock.patch.object(transfer, "POLL_SECONDS", 0)]
+                  mock.patch.object(transfer, "POLL_SECONDS", 0)]
         for patcher in self.p:
             patcher.start(); self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
@@ -76,7 +77,8 @@ class Transfer(unittest.TestCase):
             "upload_url": self.base + "/t/file?sig=up", "download_url": self.base + "/t/file?sig=down"}
         out = io.StringIO()
         with redirect_stdout(out):
-            self.assertEqual(transfer.push([str(src)]), 0)
+            result = transfer.push_file(str(src), self.phone)
+        self.assertEqual(result, {"filename": "cat_photo.jpg", "size": 6, "content_type": "image/jpeg", "expires_at": 1_800_000_000})
         self.assertEqual(self.calls, [("POST", "/sessions/abc123def456/files", {"filename": "cat photo.jpg", "content_type": "image/jpeg"})])
         self.assertEqual(Store.objects["/t/file"], (b"\xff\xd8jpeg", "image/jpeg"))
         self.assertEqual(self.phone.opened, [("url.open", {"url": self.base + "/t/file?sig=down"})])
@@ -99,9 +101,9 @@ class Transfer(unittest.TestCase):
         Store.objects["/t/file"] = (b"bytes", "image/jpeg")
         out = io.StringIO()
         with mock.patch.object(cloud, "_api", api), redirect_stdout(out):
-            self.assertEqual(transfer.pull(["--out", self.tmp.name]), 0)
+            result = transfer.pull_file(self.phone, out_dir=self.tmp.name)
         self.assertEqual(self.phone.opened, [("url.open", {"url": self.base + "/t/inbox.html?sig=page"})])
-        result = json.loads(out.getvalue().strip().splitlines()[-1])
+        self.assertEqual(out.getvalue().strip().splitlines()[-1], result["path"])
         self.assertEqual((result["path"], result["size"], result["sha256"]),
                          (str(Path(self.tmp.name) / "IMG_0001.jpeg"), 5, hashlib.sha256(b"bytes").hexdigest()))
         self.assertEqual(Path(result["path"]).read_bytes(), b"bytes")
@@ -110,16 +112,17 @@ class Transfer(unittest.TestCase):
     def test_a_phone_without_url_open_is_refused_before_anything_is_uploaded(self):
         self.phone.ops = set()
         src = Path(self.tmp.name) / "a.jpg"; src.write_bytes(b"x")
-        with self.assertRaises(SystemExit) as e:
-            transfer.push([str(src)])
+        with self.assertRaises(Unsupported) as e:
+            transfer.push_file(str(src), self.phone)
         self.assertIn("url.open", str(e.exception))
         self.assertEqual(self.calls, [])
 
-    def test_an_adb_session_is_refused(self):
-        with mock.patch.object(cloud, "attached", lambda kind=None: {"sid": "x", "link": {"kind": "adb", "host": "h", "port": 1}}):
-            with self.assertRaises(SystemExit) as e:
-                transfer.pull([])
-        self.assertIn("adb", str(e.exception))
+    def test_a_local_or_adb_phone_is_cloud_only_for_now(self):
+        for sess in ({"sid": "x", "link": {"kind": "adb", "host": "h", "port": 1}}, None):
+            with self.subTest(sess=sess), mock.patch.object(cloud, "attached", lambda kind=None, s=sess: s):
+                with self.assertRaises(Unsupported) as e:
+                    transfer.pull_file(self.phone, out_dir=self.tmp.name)
+                self.assertIn("cloud phones only for now", str(e.exception))
 
 
 if __name__ == "__main__":
