@@ -49,4 +49,4 @@ packages = ["src/phone_harness"]
 "agent-workspace/agent_helpers.py" = "phone_harness/agent_workspace/agent_helpers.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/phone_harness", "SKILL.md", "onboarding.md", "README.md", "LICENSE", "install.md", "agent-workspace/agent_helpers.py"]
+include = ["src/phone_harness", "SKILL.md", "onboarding.md", "README.md", "LICENSE", "install.md", "setup", "agent-workspace/agent_helpers.py"]

@@ -13,6 +13,27 @@ and that is what the per-phone sections below are for. Read **Which phone**, the
 shared **Working method**, and then only the section for the phone in front
 of you.
 
+## Setup
+
+Check what this machine can do (OS, shell, install rights, network,
+attached phones; `phone-harness doctor` does the phone part), tell the user
+in a sentence or two which phone you can drive with what is here, and use
+the best one that actually runs. A phone on the desk wins; the cloud needs
+no hardware and is always the fallback.
+
+| Mode | Needs |
+| --- | --- |
+| Personal iPhone | macOS 15+, iPhone Mirroring paired to an iOS 18+ iPhone, Accessibility + Screen Recording for the app that runs Python |
+| Android on the desk | macOS, Linux or Windows; adb; USB debugging (or Wireless debugging, Android 11+) |
+| Cloud iPhone | HTTPS to phone-harness.com hosts; a signed-in account. No adb, any OS |
+| Cloud Android | the cloud iPhone list, plus adb and outbound TCP to the phone's adb port |
+| No install possible | HTTPS and an HTTP client: the API directly |
+
+- If something is missing, name it and the one step the user can take.
+- Ask the user only to approve sign-in and to pick a phone.
+- Detail: [iPhone](https://github.com/ShawnPana/phone-harness/blob/main/setup/ios.md), [Android](https://github.com/ShawnPana/phone-harness/blob/main/setup/android.md),
+  [Cloud](https://github.com/ShawnPana/phone-harness/blob/main/setup/cloud.md), [API](https://github.com/ShawnPana/phone-harness/blob/main/setup/api.md).
+
 ## Helpers
 
 - `ensure_device()` - Screen bounds once the device is usable, or raises with what the user has to do.

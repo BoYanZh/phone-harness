@@ -32,7 +32,36 @@ def run_doctor(platform=None):
         _doctor_ios()
     ok = not _failures
     print("\nall clear" if ok else "\nfix the FAILs above, then re-run")
+    if not ok:
+        print(CLOUD_HINT)
     return 0 if ok else 1
+
+
+CLOUD_HINT = ("\nNo working phone here? A cloud phone needs no hardware: "
+              "`phone-harness cloud login`, `phone-harness cloud ls`, then "
+              "`phone-harness cloud start PHONE` (a cloud iPhone needs no adb; "
+              "a cloud Android needs adb). "
+              "No install possible? Use the HTTPS API: "
+              "https://github.com/ShawnPana/phone-harness/blob/main/setup/api.md")
+
+
+def _host_app():
+    """The app macOS asks about: the outermost .app this process runs under
+    (a terminal, or an agent's own app). Falls back to a description."""
+    found, pid = None, os.getppid()
+    for _ in range(40):
+        if pid <= 1:
+            break
+        try:
+            out = subprocess.run(["ps", "-o", "ppid=,comm=", "-p", str(pid)],
+                                 capture_output=True, text=True, timeout=5).stdout.strip()
+            ppid, comm = out.split(None, 1)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            break
+        if ".app/" in comm:
+            found = comm.split(".app/")[0].rsplit("/", 1)[-1]
+        pid = int(ppid)
+    return f'"{found}"' if found else "the app that runs this command (your terminal or agent app)"
 
 
 # --- iPhone: pyobjc -> permissions -> Mirroring -> capture -> OCR -----------
@@ -48,13 +77,15 @@ def _doctor_ios():
         return
 
     from ApplicationServices import AXIsProcessTrusted
+    host = _host_app()
     _check("Accessibility permission (taps & keystrokes)", AXIsProcessTrusted(),
-           "System Settings > Privacy & Security > Accessibility: enable your terminal")
+           f"System Settings > Privacy & Security > Accessibility: turn on {host}")
 
     import Quartz as Q
     _check("Screen Recording permission (seeing the phone)",
            bool(Q.CGPreflightScreenCaptureAccess()),
-           "System Settings > Privacy & Security > Screen Recording: enable your terminal")
+           f"System Settings > Privacy & Security > Screen Recording: turn on {host}, "
+           f"then quit and reopen it")
 
     from . import mirror
     _check(f"{mirror.APP_NAME} installed", Path(mirror.APP_PATH).exists(),
