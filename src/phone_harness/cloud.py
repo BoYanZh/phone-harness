@@ -951,7 +951,7 @@ def _logout(args):
     _auth_path().unlink(missing_ok=True)
     print("Signed out.")
     if attached():
-        print("A cloud phone is still running and billing; sign in again to stop it.")
+        print("A cloud phone is still running; sign in again to stop it.")
     return 0
 
 
@@ -1325,7 +1325,7 @@ def _stop(args):
             before = _api("GET", f"/sessions/{sid}")
             held_profile = held_profile or _keeps_state(before)
             _api("DELETE", f"/sessions/{sid}")
-            print(f"{term.mark()} Session {sid} ended; billing stopped.")
+            print(f"{term.mark()} Session {sid} ended.")
         except CloudError as e:
             if e.status != 404:
                 raise

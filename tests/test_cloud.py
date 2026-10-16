@@ -771,7 +771,7 @@ class CloudCli(unittest.TestCase):
         r = self.run_cli("cloud", "stop")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertLess(time.monotonic() - started, 2.5)             # no polling for the save
-        self.assertIn("billing stopped", r.stdout)
+        self.assertIn("ended.", r.stdout)
         self.assertIn("being saved", r.stdout)
         self.assertEqual(FakeCloud.sessions, {})
         state = json.loads((Path(self.home.name) / "state" / "cloud.json").read_text())
