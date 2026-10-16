@@ -5,10 +5,20 @@ possible: detect what is already in place, and stop only for the steps that
 need the user's hands. Tell them exactly what to do on the phone or in System
 Settings, then wait.
 
+## 0. Look before you ask
+
+Check what this machine has: the OS, whether you can run and install
+commands, network access, and any phone (`phone-harness doctor`). Then tell
+the user in a sentence or two what you can drive from here, for example "This
+is a Linux box with no phone attached, so I can use a cloud iPhone or Android."
+iPhone Mirroring needs a Mac; without a Mac or a phone, the cloud (step 6) is
+the setup. If you cannot install anything, use the API:
+https://github.com/ShawnPana/phone-harness/blob/main/setup/api.md
+
 ## 1. One question
 
 "Which phone should be your default — your iPhone, an Android on your desk,
-or an Android in the cloud?" (Both an iPhone and an Android is fine: set up
+or a phone in the cloud (Android or iPhone)?" (Both an iPhone and an Android is fine: set up
 each, then ask which is the default.) Someone with no phone at all picks the
 cloud: for them, step 6 is the setup and the demo runs there.
 
@@ -22,7 +32,7 @@ Works through the macOS iPhone Mirroring app. Two things only the user can do:
   Settings → Privacy & Security (Screen Recording takes effect after the
   terminal restarts).
 
-Check first — `phone-harness --doctor ios` — and only ask for what is missing.
+Check first — `phone-harness doctor ios` — and only ask for what is missing.
 Whenever you capture or verify the screen, bring the Mirroring window forward
 so the user can see what you're doing.
 

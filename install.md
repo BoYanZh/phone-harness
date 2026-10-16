@@ -11,6 +11,18 @@ default and can switch per call. Reading on-screen text is `screen()`;
 the helper names and signatures are in the skill (`SKILL.md`, printed by
 `phone-harness skill`).
 
+## Which mode can this machine run?
+
+| Mode | Needs | Detail |
+| --- | --- | --- |
+| Personal iPhone | macOS 15+, paired iPhone Mirroring (iOS 18+), Accessibility + Screen Recording for the app that runs Python | [setup/ios.md](https://github.com/ShawnPana/phone-harness/blob/main/setup/ios.md) |
+| Android on the desk | macOS, Linux or Windows; adb; USB or Wireless debugging | [setup/android.md](https://github.com/ShawnPana/phone-harness/blob/main/setup/android.md) |
+| Cloud iPhone | HTTPS only; a signed-in account | [setup/cloud.md](https://github.com/ShawnPana/phone-harness/blob/main/setup/cloud.md) |
+| Cloud Android | HTTPS, adb, and outbound TCP to the phone's adb port | [setup/cloud.md](https://github.com/ShawnPana/phone-harness/blob/main/setup/cloud.md) |
+| Can't install anything | an HTTP client | [setup/api.md](https://github.com/ShawnPana/phone-harness/blob/main/setup/api.md) |
+
+No Mac and no phone is not a dead end: the cloud needs no hardware.
+
 ## Fast Path
 
 ```bash
@@ -93,43 +105,13 @@ writing into the checkout.
 
 ## iPhone
 
-- macOS Sequoia+ with **iPhone Mirroring** paired to the phone (open the app
-  once and finish its pairing prompts — this needs the physical phone).
-- Two permissions for your **terminal**, in System Settings → Privacy & Security:
-  - **Accessibility** — taps and keystrokes. Takes effect immediately.
-  - **Screen Recording** — seeing the phone. Takes effect after the terminal
-    restarts.
-  ```bash
-  open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-  open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
-  ```
-- Then `phone-harness --doctor ios`.
-
-> You may need to grant more than these two. They are the permissions we
-> *know* are required and all `--doctor` checks; a fresh machine may prompt for
-> more the first time an action runs. If `--doctor` passes but taps, typing, or
-> capture silently do nothing, look for a macOS permission prompt.
+See [setup/ios.md](https://github.com/ShawnPana/phone-harness/blob/main/setup/ios.md), then `phone-harness doctor ios`.
 
 ## Android
 
-- adb: `brew install android-platform-tools` (macOS), `apt install adb` (Debian/Ubuntu),
-  `winget install Google.PlatformTools` (Windows). Optional: `scrcpy` (`brew` /
-  `apt` / `winget install Genymobile.scrcpy`) for a live mirror window during
-  `phone-harness android awake`.
-- On the phone, once: Settings → About phone → tap **Build number** 7× →
-  Settings → System → **Developer options**.
-- **USB**: Developer options → **USB debugging** on → plug in → tap **Allow**
-  (tick "Always allow from this computer"). Done.
-- **Wi‑Fi** (Android 11+, same network as the Mac): Developer options →
-  **Wireless debugging** on → tap the row → **Pair device with pairing code** →
-  `phone-harness android pair 123456` with the code shown. The phone is
-  remembered by name; from then on the harness finds and connects it itself.
-- `phone-harness config set platform android` to make it the default, then
-  `phone-harness --doctor android`.
-- `phone-harness android` shows known phones and what is attached; a plugged-in
-  phone always wins over Wi‑Fi. Long task? `phone-harness android awake --bg`
-  keeps the phone unlocked for the session without changing any setting;
-  `phone-harness android rest` ends it.
+See [setup/android.md](https://github.com/ShawnPana/phone-harness/blob/main/setup/android.md), then `phone-harness doctor android`.
+`phone-harness android` shows known phones; `phone-harness android awake --bg`
+keeps one unlocked for a long task and `phone-harness android rest` ends it.
 
 ## Both
 
@@ -142,7 +124,8 @@ cloud iPhone is a third path: HTTPS ops, covered in the skill.
 
 ## If It Fails
 
-`--doctor` walks the ladder in order and names the missing step. Common ones:
+`phone-harness doctor` walks the ladder in order and names the missing step. When a
+local check fails it also points at the cloud. Common ones:
 
 - **iPhone — capture is blank/black**: Screen Recording granted but the
   terminal wasn't restarted; or Mirroring shows an interstitial (iPhone in Use /

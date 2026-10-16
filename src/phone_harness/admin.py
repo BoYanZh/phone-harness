@@ -32,7 +32,16 @@ def run_doctor(platform=None):
         _doctor_ios()
     ok = not _failures
     print("\nall clear" if ok else "\nfix the FAILs above, then re-run")
+    if not ok:
+        print(CLOUD_HINT)
     return 0 if ok else 1
+
+
+CLOUD_HINT = ("\nNo working phone here? A cloud phone needs no hardware: "
+              "`phone-harness cloud login`, then `phone-harness cloud start ios` "
+              "(no adb needed) or `phone-harness cloud start android` (needs adb). "
+              "No install possible? Use the HTTPS API: "
+              "https://github.com/ShawnPana/phone-harness/blob/main/setup/api.md")
 
 
 # --- iPhone: pyobjc -> permissions -> Mirroring -> capture -> OCR -----------

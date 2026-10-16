@@ -496,3 +496,29 @@ class SessionAndStdinGuard(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DoctorSuggestsCloud(unittest.TestCase):
+    def test_failed_local_doctor_points_at_cloud(self):
+        import contextlib, io
+        from unittest import mock
+        from phone_harness import admin
+        out = io.StringIO()
+        with mock.patch.object(admin, "_doctor_android",
+                               lambda: admin._check("adb found", False)), \
+                contextlib.redirect_stdout(out):
+            code = admin.run_doctor("android")
+        self.assertEqual(code, 1)
+        self.assertIn("phone-harness cloud login", out.getvalue())
+        self.assertIn("setup/api.md", out.getvalue())
+
+    def test_passing_doctor_does_not_mention_cloud(self):
+        import contextlib, io
+        from unittest import mock
+        from phone_harness import admin
+        out = io.StringIO()
+        with mock.patch.object(admin, "_doctor_android",
+                               lambda: admin._check("adb found", True)), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(admin.run_doctor("android"), 0)
+        self.assertNotIn("cloud login", out.getvalue())
