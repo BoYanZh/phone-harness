@@ -81,6 +81,8 @@ phone-harness cloud start ios        # the account's iPhone, when only one is li
 phone-harness <<'PY'
 print(screenshot())
 PY
+phone-harness push photo.jpg         # a cloud iPhone opens the file in its browser
+phone-harness pull                   # the phone shows an upload page; what is sent lands here
 phone-harness cloud stop             # ends the session; a saved Android is written back
 ```
 

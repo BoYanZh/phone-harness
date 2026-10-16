@@ -168,6 +168,9 @@ class Remote(Backend):
     def _apps_list(self, include_system=False):
         return self._op("apps.list", timeout=90, include_system=include_system)
 
+    def _url_open(self, url):
+        return self._op("url.open", timeout=60, url=url)
+
     def _session_refocus(self):
         return None
 

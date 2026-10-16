@@ -575,6 +575,12 @@ def open_app(name):
     return result
 
 
+def open_url(url):
+    """Open an https link in the phone's browser; the link arrives whole.
+    Unsupported where the phone has no such path (check supports('url.open'))."""
+    return phone.send("url.open", url=url)
+
+
 def current_app():
     """Foreground app id. Unsupported where the device exposes no inventory."""
     return send("apps.current")

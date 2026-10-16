@@ -337,10 +337,33 @@ documents or decodes.
 | `session.detail` | | a string. Local. |
 | `focus.probe` | | an opaque snapshot. Local: `(True,)`. |
 | `focus.diff` | `before, after` | `{raised, stole_focus}`. Local: both false. |
+| `url.open` | `url` | app id. Opens an https link in the phone's browser, whole. Timeout 60s. |
 | `tree` | | `[node]` where the device has one |
 | `raw` | backend-specific | host result |
 
 Trust `GET /ops` when the host's list is shorter than this table.
+
+### Files on a cloud iPhone
+
+There is no shell, so bytes move through storage links the service signs and
+the phone's `url.open` op. Two commands wrap it; both take `--session SID`.
+
+- `phone-harness push FILE` uploads FILE and opens it in the phone's
+  browser under its own name (a JPEG shows as an image, an MP4 plays). From
+  there the phone's own UI decides what to do with it; look at the screen and
+  act on what is there, as with any other task.
+- `phone-harness pull [--out DIR]` opens a one-page upload form in the
+  phone's browser and waits. Whoever is driving the phone picks a file on
+  that page and sends it; the command then downloads it and prints the local
+  path, size and sha256 as JSON.
+- `open_url(url)` is the helper behind both: any https link, opened whole,
+  with no typing and no clipboard. Check `supports('url.open')` first; an
+  older host lists no such op.
+
+Links expire within fifteen minutes and with the session; the files are
+removed when the session ends. A link is a credential: do not paste one into
+notes or output.
+
 
 - **Coordinates are `screen.bounds`.** `tap(x, y)`, `find_window()`,
   `send("screen.require")`, and centres from `screen()` all use that space:

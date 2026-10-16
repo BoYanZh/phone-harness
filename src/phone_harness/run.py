@@ -24,6 +24,8 @@ Commands:
   phone-harness skill       print the phone-harness skill text
   phone-harness android ... pair/connect/choose an Android phone
   phone-harness cloud ...   rent a catalog phone: `cloud login`, `cloud ls`, `cloud start [PHONE]`
+  phone-harness push FILE   send a file to the attached cloud phone; it opens in the phone's browser
+  phone-harness pull        the phone shows an upload page; what is sent there lands here
   phone-harness config ...  settings: `config set platform android`
   phone-harness update      update this install: uv tool upgrade, git pull, or the pip command
 
@@ -137,7 +139,7 @@ def _telemetry_command(args):
         return "version"
     if first in {"--doctor", "doctor"}:
         return "doctor"
-    if first in {"android", "cloud", "config", "skill", "update"}:
+    if first in {"android", "cloud", "config", "skill", "update", "push", "pull"}:
         return first
     return "usage"
 
@@ -280,7 +282,7 @@ def _take_session(args):
 # These three parse their own argv, including --help. A leading --help is
 # the top-level parser, so only a bare command name takes this path.
 # --version is handled before this, in any position.
-_OWNED = {"android", "cloud", "config"}
+_OWNED = {"android", "cloud", "config", "push", "pull"}
 
 
 def _version_text():
@@ -360,6 +362,9 @@ def _dispatch_owned(name, rest):
         from .android import cli
     elif name == "cloud":
         from .cloud import cli
+    elif name in ("push", "pull"):
+        from . import transfer
+        cli = transfer.push if name == "push" else transfer.pull
     else:
         from .config import cli
     sys.exit(cli(rest))

@@ -59,6 +59,12 @@ nothing in common — so the shared layer is this vocabulary instead.
     focus.probe                         -> opaque snapshot
     focus.diff          before, after   -> {raised, stole_focus}
 
+    url.open            url             -> app id
+
+        Opens an https link in the phone's browser. The link arrives whole,
+        without typing or the clipboard. Unsupported where the phone has no
+        such path; a link is often a credential, so it is never logged.
+
         Whether driving the phone disturbed whatever the user was doing. Two
         separate questions on purpose: taking keyboard focus is a mild
         annoyance, covering the screen is not, and a backend that reaches the
@@ -92,6 +98,7 @@ OP_NAMES = (
     "apps.launch", "apps.current", "apps.list",
     "session.state", "session.require", "session.refocus", "session.detail",
     "focus.probe", "focus.diff",
+    "url.open",
     "tree", "raw",
 )
 
