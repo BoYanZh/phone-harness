@@ -135,10 +135,13 @@ class Remote(Backend):
             self._ops = set(self._call("GET", "/ops")["ops"])
         return self._ops
 
+    # Ops answered here without asking the host: bookkeeping for a phone
+    # nobody's screen shows. Every other op, including the ones with a local
+    # method that only shapes the result, exists only if the host lists it.
+    LOCAL_OPS = frozenset({"session.refocus", "session.detail", "focus.probe", "focus.diff"})
+
     def supports(self, op):
-        # What the far side offers, plus the local bookkeeping ops (focus,
-        # refocus) that mean nothing for a phone nobody's screen shows.
-        return op in self._known() or getattr(self, self._slot(op), None) is not None
+        return op in self.LOCAL_OPS or op in self._known()
 
     def send(self, op, **kw):
         if not self.supports(op):

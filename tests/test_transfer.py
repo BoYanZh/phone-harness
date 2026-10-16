@@ -49,6 +49,18 @@ class FakePhone:
         return "com.apple.mobilesafari"
 
 
+class RemoteSupport(unittest.TestCase):
+    def test_an_op_the_host_does_not_list_is_unsupported_even_with_a_local_method(self):
+        from phone_harness.remote import Remote
+        r = Remote("https://api.test/iphone/c/tok", "t")
+        r._ops = {"screen.capture", "input.tap"}          # what the host said
+        self.assertTrue(r.supports("screen.capture"))
+        self.assertTrue(r.supports("focus.probe"))         # local bookkeeping
+        self.assertFalse(r.supports("url.open"))           # has _url_open, but the host lacks it
+        with self.assertRaises(Unsupported):
+            r.send("url.open", url="https://x")
+
+
 class Transfer(unittest.TestCase):
     def setUp(self):
         Store.objects = {}
