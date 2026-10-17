@@ -1,0 +1,126 @@
+"""push_file: the file route, a storage link, and the phone's url.open. No cloud: the API, the phone and the store are stand-ins."""
+import hashlib
+import io
+import json
+import os
+import sys
+import tempfile
+import threading
+import unittest
+from contextlib import redirect_stdout
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from phone_harness import cloud, transfer  # noqa: E402
+from phone_harness.transport import Unsupported  # noqa: E402
+
+
+class Store(BaseHTTPRequestHandler):
+    objects = {}
+    tags = {}
+
+    def log_message(self, *a):
+        pass
+
+    def do_PUT(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        Store.objects[self.path.split("?")[0]] = (self.rfile.read(n), self.headers.get("Content-Type"))
+        Store.tags[self.path.split("?")[0]] = self.headers.get("x-amz-tagging")
+        self.send_response(200); self.send_header("Content-Length", "0"); self.end_headers()
+
+    def do_GET(self):
+        body, _ = Store.objects.get(self.path.split("?")[0], (None, None))
+        self.send_response(200 if body is not None else 404)
+        self.send_header("Content-Length", str(len(body or b""))); self.end_headers()
+        if body:
+            self.wfile.write(body)
+
+
+class FakePhone:
+    def __init__(self, ops=("url.open",)):
+        self.ops, self.opened = set(ops), []
+
+    def supports(self, op):
+        return op in self.ops
+
+    def send(self, op, **kw):
+        self.opened.append((op, kw))
+        return "com.apple.mobilesafari"
+
+
+class RemoteSupport(unittest.TestCase):
+    def test_an_op_the_host_does_not_list_is_unsupported_even_with_a_local_method(self):
+        from phone_harness.remote import Remote
+        r = Remote("https://api.test/iphone/c/tok", "t")
+        r._ops = {"screen.capture", "input.tap"}          # what the host said
+        self.assertTrue(r.supports("screen.capture"))
+        self.assertTrue(r.supports("focus.probe"))         # local bookkeeping
+        self.assertFalse(r.supports("url.open"))           # has _url_open, but the host lacks it
+        with self.assertRaises(Unsupported):
+            r.send("url.open", url="https://x")
+
+
+class Transfer(unittest.TestCase):
+    def setUp(self):
+        Store.objects = {}
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), Store)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.addCleanup(self.srv.server_close); self.addCleanup(self.srv.shutdown)
+        self.base = f"http://127.0.0.1:{self.srv.server_port}"
+        self.phone = FakePhone()
+        self.calls = []
+        sess = {"sid": "abc123def456", "link": {"kind": "control", "url": "https://api.test/iphone/c/tok", "token": "t"}}
+        self.api_replies = {}
+
+        def api(method, path, body=None, **kw):
+            self.calls.append((method, path, body))
+            return self.api_replies[(method, path)]
+        self.p = [mock.patch.object(cloud, "attached", lambda kind=None: sess), mock.patch.object(cloud, "_api", api)]
+        for patcher in self.p:
+            patcher.start(); self.addCleanup(patcher.stop)
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+
+    def test_push_uploads_then_the_phone_opens_the_download_link(self):
+        src = Path(self.tmp.name) / "cat photo.jpg"; src.write_bytes(b"\xff\xd8jpeg")
+        self.api_replies[("POST", "/sessions/abc123def456/files")] = {
+            "id": "0123456789abcdef", "filename": "cat_photo.jpg", "content_type": "image/jpeg", "expires_at": 1_800_000_000,
+            "upload_headers": {"Content-Type": "image/jpeg", "x-amz-tagging": "class=transfer"},
+            "upload_url": self.base + "/t/file?sig=up", "download_url": self.base + "/t/file?sig=down"}
+        out = io.StringIO()
+        with redirect_stdout(out):
+            result = transfer.push_file(str(src), self.phone)
+        self.assertEqual(result, {"filename": "cat_photo.jpg", "size": 6, "content_type": "image/jpeg", "expires_at": 1_800_000_000})
+        self.assertEqual(self.calls, [("POST", "/sessions/abc123def456/files", {"filename": "cat photo.jpg", "content_type": "image/jpeg"})])
+        self.assertEqual(Store.objects["/t/file"], (b"\xff\xd8jpeg", "image/jpeg"))
+        self.assertEqual(Store.tags.get("/t/file"), "class=transfer")      # the signed header went with the PUT
+        self.assertEqual(self.phone.opened, [("url.open", {"url": self.base + "/t/file?sig=down"})])
+        self.assertIn("cat_photo.jpg", out.getvalue())
+        self.assertNotIn("sig=", out.getvalue())                     # links are credentials: never printed
+
+    def test_a_phone_without_url_open_is_refused_before_anything_is_uploaded(self):
+        self.phone.ops = set()
+        src = Path(self.tmp.name) / "a.jpg"; src.write_bytes(b"x")
+        with self.assertRaises(Unsupported) as e:
+            transfer.push_file(str(src), self.phone)
+        self.assertIn("url.open", str(e.exception))
+        self.assertEqual(self.calls, [])
+
+    def test_a_local_or_adb_phone_is_cloud_only_for_now(self):
+        src = Path(self.tmp.name) / "a.jpg"; src.write_bytes(b"x")
+        for sess in ({"sid": "x", "link": {"kind": "adb", "host": "h", "port": 1}}, None):
+            with self.subTest(sess=sess), mock.patch.object(cloud, "attached", lambda kind=None, s=sess: s):
+                with self.assertRaises(Unsupported) as e:
+                    transfer.push_file(str(src), self.phone)
+                self.assertIn("cloud phones only for now", str(e.exception))
+        self.assertEqual(self.calls, [])
+
+    def test_there_is_no_pull(self):
+        from phone_harness import helpers
+        self.assertFalse(hasattr(transfer, "pull_file"))
+        self.assertFalse(hasattr(helpers, "pull_file"))
+
+
+if __name__ == "__main__":
+    unittest.main()

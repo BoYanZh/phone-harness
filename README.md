@@ -98,7 +98,7 @@ service gives an unnamed start, a temporary Android. A name is a catalog id or l
 is reached over adb, so every helper works on it unchanged. A cloud iPhone has
 no shell: the helpers POST ops over HTTPS, OCR runs on the host, and driving
 it is in [SKILL.md](SKILL.md). `phone-harness cloud` lists the rest, including
-`watch`, `open`, `history`, and `phone` for the saved Android. `--session SID`
+`watch`, `open`, `history`, and `phone` for the saved Android. A file goes to the phone with the `push_file(path)` helper (cloud iPhone only for now). `--session SID`
 (or `PHONE_HARNESS_SESSION`) pins one rented phone for this process.
 
 ## Updates

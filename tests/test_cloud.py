@@ -244,7 +244,7 @@ class FakeControl(BaseHTTPRequestHandler):
             # nav.back is advertised so the client actually POSTs it; the op
             # answer below is the unsupported 400 the live iPhone returns.
             return self._send(200, {"ops": ["screen.capture", "screen.bounds", "input.tap",
-                                            "nav.home", "nav.back"]})
+                                            "nav.home", "nav.back", "apps.launch"]})
         if self.path == "/op":
             FakeControl.calls.append(body)
             op = body["op"]

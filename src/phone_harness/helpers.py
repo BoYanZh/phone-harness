@@ -575,6 +575,21 @@ def open_app(name):
     return result
 
 
+def open_url(url):
+    """Open an https link in the phone's browser; the link arrives whole, with
+    no typing and no clipboard. Cloud phones only for now."""
+    if not phone.supports("url.open"):
+        raise transport.Unsupported("cloud phones only for now: open_url needs a cloud phone whose host can open links")
+    return phone.send("url.open", url=url)
+
+
+def push_file(path):
+    """Send a file to the phone: it opens in the phone's browser under its own
+    name. Cloud phones only for now. Returns {filename, size, content_type, expires_at}."""
+    from . import transfer
+    return transfer.push_file(path, phone)
+
+
 def current_app():
     """Foreground app id. Unsupported where the device exposes no inventory."""
     return send("apps.current")
