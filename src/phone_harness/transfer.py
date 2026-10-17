@@ -39,9 +39,11 @@ def _session(what, backend):
     return sess
 
 
-def _put(url, path, content_type):
+def _put(url, path, headers):
+    """PUT the file to its signed link with exactly the headers the service
+    named: the store signed them into the link and refuses a PUT without them."""
     data = Path(path).read_bytes()
-    req = urllib.request.Request(url, data=data, method="PUT", headers={"Content-Type": content_type})
+    req = urllib.request.Request(url, data=data, method="PUT", headers=dict(headers))
     try:
         with urllib.request.urlopen(req, timeout=max(60, len(data) / 200_000)) as reply:
             if reply.status // 100 != 2:
@@ -85,7 +87,8 @@ def push_file(path, backend):
     content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
     transfer = cloud._api("POST", f"/sessions/{sess['sid']}/files",
                           {"filename": path.name, "content_type": content_type})
-    size = _put(transfer["upload_url"], path, content_type)
+    headers = transfer.get("upload_headers") or {"Content-Type": content_type}
+    size = _put(transfer["upload_url"], path, headers)
     backend.send("url.open", url=transfer["download_url"])
     print(f"{transfer['filename']} ({size:,} bytes) is open in the phone's browser")
     return {"filename": transfer["filename"], "size": size, "content_type": content_type,

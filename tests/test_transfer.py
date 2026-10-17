@@ -20,6 +20,7 @@ from phone_harness.transport import Unsupported  # noqa: E402
 
 class Store(BaseHTTPRequestHandler):
     objects = {}
+    tags = {}
 
     def log_message(self, *a):
         pass
@@ -27,6 +28,7 @@ class Store(BaseHTTPRequestHandler):
     def do_PUT(self):
         n = int(self.headers.get("Content-Length") or 0)
         Store.objects[self.path.split("?")[0]] = (self.rfile.read(n), self.headers.get("Content-Type"))
+        Store.tags[self.path.split("?")[0]] = self.headers.get("x-amz-tagging")
         self.send_response(200); self.send_header("Content-Length", "0"); self.end_headers()
 
     def do_GET(self):
@@ -86,6 +88,7 @@ class Transfer(unittest.TestCase):
         src = Path(self.tmp.name) / "cat photo.jpg"; src.write_bytes(b"\xff\xd8jpeg")
         self.api_replies[("POST", "/sessions/abc123def456/files")] = {
             "id": "0123456789abcdef", "filename": "cat_photo.jpg", "content_type": "image/jpeg", "expires_at": 1_800_000_000,
+            "upload_headers": {"Content-Type": "image/jpeg", "x-amz-tagging": "class=transfer"},
             "upload_url": self.base + "/t/file?sig=up", "download_url": self.base + "/t/file?sig=down"}
         out = io.StringIO()
         with redirect_stdout(out):
@@ -93,6 +96,7 @@ class Transfer(unittest.TestCase):
         self.assertEqual(result, {"filename": "cat_photo.jpg", "size": 6, "content_type": "image/jpeg", "expires_at": 1_800_000_000})
         self.assertEqual(self.calls, [("POST", "/sessions/abc123def456/files", {"filename": "cat photo.jpg", "content_type": "image/jpeg"})])
         self.assertEqual(Store.objects["/t/file"], (b"\xff\xd8jpeg", "image/jpeg"))
+        self.assertEqual(Store.tags.get("/t/file"), "class=transfer")      # the signed header went with the PUT
         self.assertEqual(self.phone.opened, [("url.open", {"url": self.base + "/t/file?sig=down"})])
         self.assertIn("cat_photo.jpg", out.getvalue())
         self.assertNotIn("sig=", out.getvalue())                     # links are credentials: never printed
