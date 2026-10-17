@@ -1,5 +1,4 @@
-"""push_file and pull_file: the file routes, a storage link each way, and the
-phone's url.open. No cloud: the API, the phone and the store are stand-ins."""
+"""push_file: the file route, a storage link, and the phone's url.open. No cloud: the API, the phone and the store are stand-ins."""
 import hashlib
 import io
 import json
@@ -78,8 +77,7 @@ class Transfer(unittest.TestCase):
         def api(method, path, body=None, **kw):
             self.calls.append((method, path, body))
             return self.api_replies[(method, path)]
-        self.p = [mock.patch.object(cloud, "attached", lambda kind=None: sess), mock.patch.object(cloud, "_api", api),
-                  mock.patch.object(transfer, "POLL_SECONDS", 0)]
+        self.p = [mock.patch.object(cloud, "attached", lambda kind=None: sess), mock.patch.object(cloud, "_api", api)]
         for patcher in self.p:
             patcher.start(); self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
@@ -101,30 +99,6 @@ class Transfer(unittest.TestCase):
         self.assertIn("cat_photo.jpg", out.getvalue())
         self.assertNotIn("sig=", out.getvalue())                     # links are credentials: never printed
 
-    def test_pull_opens_the_inbox_page_waits_and_downloads_under_the_phone_s_name(self):
-        self.api_replies[("POST", "/sessions/abc123def456/files/inbox")] = {
-            "id": "0123456789abcdef", "page_url": self.base + "/t/inbox.html?sig=page", "expires_at": 1_800_000_000}
-        states = iter([{"id": "0123456789abcdef", "state": "waiting"},
-                       {"id": "0123456789abcdef", "state": "uploaded", "filename": "IMG_0001.jpeg", "size": 5,
-                        "content_type": "image/jpeg", "download_url": self.base + "/t/file?sig=get", "expires_at": 1_800_000_000}])
-        self.api_replies[("GET", "/sessions/abc123def456/files/0123456789abcdef")] = None
-        real = cloud._api
-
-        def api(method, path, body=None, **kw):
-            if method == "GET":
-                return next(states)
-            return real(method, path, body)
-        Store.objects["/t/file"] = (b"bytes", "image/jpeg")
-        out = io.StringIO()
-        with mock.patch.object(cloud, "_api", api), redirect_stdout(out):
-            result = transfer.pull_file(self.phone, out_dir=self.tmp.name)
-        self.assertEqual(self.phone.opened, [("url.open", {"url": self.base + "/t/inbox.html?sig=page"})])
-        self.assertEqual(out.getvalue().strip().splitlines()[-1], result["path"])
-        self.assertEqual((result["path"], result["size"], result["sha256"]),
-                         (str(Path(self.tmp.name) / "IMG_0001.jpeg"), 5, hashlib.sha256(b"bytes").hexdigest()))
-        self.assertEqual(Path(result["path"]).read_bytes(), b"bytes")
-        self.assertNotIn("sig=", out.getvalue())
-
     def test_a_phone_without_url_open_is_refused_before_anything_is_uploaded(self):
         self.phone.ops = set()
         src = Path(self.tmp.name) / "a.jpg"; src.write_bytes(b"x")
@@ -134,11 +108,18 @@ class Transfer(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
     def test_a_local_or_adb_phone_is_cloud_only_for_now(self):
+        src = Path(self.tmp.name) / "a.jpg"; src.write_bytes(b"x")
         for sess in ({"sid": "x", "link": {"kind": "adb", "host": "h", "port": 1}}, None):
             with self.subTest(sess=sess), mock.patch.object(cloud, "attached", lambda kind=None, s=sess: s):
                 with self.assertRaises(Unsupported) as e:
-                    transfer.pull_file(self.phone, out_dir=self.tmp.name)
+                    transfer.push_file(str(src), self.phone)
                 self.assertIn("cloud phones only for now", str(e.exception))
+        self.assertEqual(self.calls, [])
+
+    def test_there_is_no_pull(self):
+        from phone_harness import helpers
+        self.assertFalse(hasattr(transfer, "pull_file"))
+        self.assertFalse(hasattr(helpers, "pull_file"))
 
 
 if __name__ == "__main__":

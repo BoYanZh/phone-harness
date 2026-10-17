@@ -48,7 +48,6 @@ no hardware and is always the fallback.
 - `open_app(name)` - Launch an app and return the app id that launched.
 - `open_url(url)` - Open an https link in the phone's browser, whole. Cloud phones only for now.
 - `push_file(path)` - Send a file to the phone; it opens in the phone's browser under its own name. Cloud phones only for now.
-- `pull_file(out_dir=".", timeout=300)` - The phone's browser opens an upload page; what is sent there is downloaded into `out_dir`. Returns `{path, size, sha256, content_type}`. Cloud phones only for now.
 - `swipe(direction, distance=0.4, at=None)` - Flick. `direction` is finger motion: `"up"`, `"down"`, `"left"`, or `"right"`.
 - `scroll(direction="down", amount=0.3, at=None)` - Scroll. `direction` is the content to reveal: `"down"`, `"up"`, `"left"`, or `"right"`.
 - `scroll_screen(direction="down", amount=0.6, settle=2.5, moved_thresh=None, at=None)` - One scroll, then the text on screen before and after.
@@ -349,22 +348,19 @@ Trust `GET /ops` when the host's list is shorter than this table.
 ### Files on a cloud iPhone
 
 There is no shell, so bytes move through storage links the service signs and
-the phone's `url.open` op. Three helpers wrap it, and they follow the
-attached session (or `--session`) like every other helper.
+the phone's `url.open` op. Two helpers wrap it, and they follow the
+attached session (or `--session`) like every other helper. Files go to the
+phone only; nothing comes back this way.
 
 - `push_file(path)` uploads the file and opens it in the phone's browser
   under its own name (a JPEG shows as an image, an MP4 plays). From there
   the phone's own UI decides what to do with it; look at the screen and act
   on what is there, as with any other task.
-- `pull_file(out_dir=".", timeout=300)` opens a one-page upload form in the
-  phone's browser and waits. Whoever is driving the phone picks a file on
-  that page and sends it; the helper downloads it, prints the local path,
-  and returns path, size and sha256.
 - `open_url(url)` is the op behind both: any https link, opened whole, with
   no typing and no clipboard. Check `supports('url.open')` first; an older
   host lists no such op.
 
-On a local phone all three raise `Unsupported` ("cloud phones only for
+On a local phone both raise `Unsupported` ("cloud phones only for
 now"). Links expire within fifteen minutes and with the session; the files
 are removed when the session ends. A link is a credential: do not paste one
 into notes or output.

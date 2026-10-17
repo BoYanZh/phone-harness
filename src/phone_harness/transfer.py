@@ -1,4 +1,4 @@
-"""Files to a cloud phone and back: the `push_file` and `pull_file` helpers.
+"""Files to a cloud phone: the `push_file` helper.
 
 Both ride the session's file routes and the phone's `url.open` op. The
 service signs short-lived storage links; this machine uploads to or downloads
@@ -7,14 +7,10 @@ credential for fifteen minutes.
 
 push_file  upload a file, then the phone's browser opens it under its own
            name. What happens next on the phone is the caller's move.
-pull_file  the phone's browser opens a small upload page; whoever is driving
-           the phone picks a file there. This waits, downloads it, and
-           returns the local path.
 
-Cloud phones only for now: both follow the attached session (or --session),
+Cloud phones only for now: it follows the attached session (or --session),
 the one tap() drives, and a local phone raises Unsupported.
 """
-import hashlib
 import mimetypes
 import time
 import urllib.error
@@ -24,8 +20,6 @@ from pathlib import Path
 from . import cloud
 from .transport import Unsupported
 
-POLL_SECONDS = 2
-DEFAULT_WAIT = 300
 CLOUD_ONLY = "cloud phones only for now: {} needs a cloud phone whose host can open links (a cloud iPhone)"
 
 
@@ -55,24 +49,6 @@ def _put(url, path, headers):
     return len(data)
 
 
-def _get(url, dest):
-    try:
-        with urllib.request.urlopen(url, timeout=120) as reply, open(dest, "wb") as out:
-            digest, size = hashlib.sha256(), 0
-            while True:
-                chunk = reply.read(1 << 20)
-                if not chunk:
-                    break
-                out.write(chunk)
-                digest.update(chunk)
-                size += len(chunk)
-    except urllib.error.HTTPError as e:
-        raise TransferError(f"the download was refused (HTTP {e.code})") from None
-    except (urllib.error.URLError, OSError) as e:
-        raise TransferError(f"could not reach the file store ({type(e).__name__})") from None
-    return size, digest.hexdigest()
-
-
 class TransferError(RuntimeError):
     pass
 
@@ -93,35 +69,3 @@ def push_file(path, backend):
     print(f"{transfer['filename']} ({size:,} bytes) is open in the phone's browser")
     return {"filename": transfer["filename"], "size": size, "content_type": content_type,
             "expires_at": transfer["expires_at"]}
-
-
-def pull_file(backend, out_dir=".", timeout=DEFAULT_WAIT):
-    """The phone's browser opens an upload page; whoever is driving the phone
-    picks a file there. Waits up to `timeout` seconds, downloads it into
-    `out_dir`, prints the path, and returns {path, size, sha256, content_type}."""
-    out_dir = Path(out_dir).expanduser()
-    if not out_dir.is_dir():
-        raise NotADirectoryError(f"{out_dir} is not a directory")
-    sess = _session("pull_file", backend)
-    inbox = cloud._api("POST", f"/sessions/{sess['sid']}/files/inbox", {})
-    backend.send("url.open", url=inbox["page_url"])
-    print(f"the phone's browser is showing an upload page; waiting up to {int(timeout)} s for a file")
-    deadline = time.monotonic() + timeout
-    status = {"state": "waiting"}
-    while time.monotonic() < deadline:
-        status = cloud._api("GET", f"/sessions/{sess['sid']}/files/{inbox['id']}")
-        if status.get("state") == "uploaded":
-            break
-        time.sleep(POLL_SECONDS)
-    if status.get("state") != "uploaded":
-        raise TimeoutError(f"nothing arrived within {int(timeout)} s; the page on the phone stays usable "
-                           f"until {time.strftime('%H:%M', time.localtime(inbox['expires_at']))}")
-    name = status.get("filename") or f"phone-{inbox['id']}"
-    dest = out_dir / name
-    stem, suffix, n = dest.stem, dest.suffix, 1
-    while dest.exists():
-        dest = out_dir / f"{stem}-{n}{suffix}"
-        n += 1
-    size, sha = _get(status["download_url"], dest)
-    print(str(dest))
-    return {"path": str(dest), "size": size, "sha256": sha, "content_type": status.get("content_type")}

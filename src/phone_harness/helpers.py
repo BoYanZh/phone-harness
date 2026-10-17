@@ -590,14 +590,6 @@ def push_file(path):
     return transfer.push_file(path, phone)
 
 
-def pull_file(out_dir=".", timeout=300):
-    """The phone's browser opens an upload page; pick a file there and this
-    downloads it into `out_dir`, printing the path. Cloud phones only for now.
-    Returns {path, size, sha256, content_type}."""
-    from . import transfer
-    return transfer.pull_file(phone, out_dir=out_dir, timeout=timeout)
-
-
 def current_app():
     """Foreground app id. Unsupported where the device exposes no inventory."""
     return send("apps.current")
