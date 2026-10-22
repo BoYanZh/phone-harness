@@ -343,8 +343,7 @@ def scroll_wheel(dy, x, y, steps=6, dx=0):
         return
     pid, win = _ctx()
     wid = win["id"]
-    psn = _psn_for_pid(pid)
-    _sky._SLPSSetFrontProcessWithOptions(ctypes.byref(psn), wid, _KCPS_USER_GENERATED)
+    _make_key(pid, wid)
 
     lx, ly = x - win["x"], y - win["y"]
     mv = Quartz.CGEventCreateMouseEvent(
