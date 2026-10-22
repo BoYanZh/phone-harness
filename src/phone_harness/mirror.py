@@ -5,7 +5,7 @@ All public coordinates are global screen points — the same space
 macOS accessibility sees nothing inside it, so input is synthesized at the
 HID level and the window must be frontmost or events are swallowed.
 """
-import subprocess, tempfile, time
+import ctypes, subprocess, tempfile, time
 from contextlib import contextmanager
 
 import ApplicationServices as _AS
@@ -568,6 +568,14 @@ def capture(path=None, retries=2):
 
 # --- input primitives ---
 
+_libc = ctypes.CDLL(None)
+_libc.mach_absolute_time.restype = ctypes.c_uint64
+_SCROLL_PT_PER_EVENT = 7
+_SCROLL_EVENT_DELTA = 9
+_SCROLL_STEP_INTERVAL = 0.008
+_SCROLL_PHASE_BEGAN, _SCROLL_PHASE_CHANGED, _SCROLL_PHASE_ENDED = 1, 2, 4
+
+
 def _post_mouse(etype, x, y):
     ev = Quartz.CGEventCreateMouseEvent(
         None, etype, Quartz.CGPointMake(x, y), Quartz.kCGMouseButtonLeft)
@@ -610,24 +618,49 @@ def drag(x1, y1, x2, y2, duration=0.35, steps=14):
     _post_mouse(Quartz.kCGEventLeftMouseUp, x2, y2)
 
 
+def _scroll_event(x, y, phase, pt_y, pt_x):
+    ev = Quartz.CGEventCreateScrollWheelEvent(
+        None, Quartz.kCGScrollEventUnitPixel, 2, 0, 0)
+    sf = lambda f, v: Quartz.CGEventSetIntegerValueField(ev, f, v)
+    sf(88, 1)                                           # IsContinuous
+    sf(99, phase)                                       # ScrollPhase
+    sf(96, pt_y)                                        # PointDeltaAxis1
+    sf(93, int(pt_y * 65536 / 10))                      # FixedPtDeltaAxis1
+    sf(11, -1 if pt_y < 0 else (1 if pt_y > 0 else 0))  # DeltaAxis1
+    sf(97, pt_x if pt_x else (-1 if pt_y else 0))       # PointDeltaAxis2
+    if pt_x:
+        sf(94, int(pt_x * 65536 / 10))                  # FixedPtDeltaAxis2
+        sf(12, -1 if pt_x < 0 else 1)                   # DeltaAxis2
+    Quartz.CGEventSetLocation(ev, Quartz.CGPointMake(x, y))
+    Quartz.CGEventSetTimestamp(ev, _libc.mach_absolute_time())
+    return ev
+
+
 def scroll_wheel(dy, x, y, steps=6, dx=0):
-    """Scroll-gesture at (x, y), vertical and/or horizontal.
+    """Phased trackpad scroll gesture at (x, y), vertical and/or horizontal.
 
     dy > 0 reveals content further down; dx > 0 reveals content further right.
     Verified independent of the Mac's natural-scroll setting: the same deltas
     move the phone the same way with swipescrolldirection 0 and 1.
     """
+    if dy == 0 and dx == 0:
+        return
     _focus()
     require_window_at(x, y)
     _post_mouse(Quartz.kCGEventMouseMoved, x, y)
     time.sleep(0.1)
-    for _ in range(steps):
-        ev = Quartz.CGEventCreateScrollWheelEvent(
-            None, Quartz.kCGScrollEventUnitPixel, 2,
-            int(dy / steps), int(dx / steps))
-        Quartz.CGEventSetLocation(ev, Quartz.CGPointMake(x, y))
-        Quartz.CGEventPost(Quartz.kCGHIDEventTap, ev)
-        time.sleep(0.03)
+    dist = max(abs(dy), abs(dx))
+    n = max(1, round(dist / _SCROLL_PT_PER_EVENT))
+    pt_y = (_SCROLL_EVENT_DELTA if dy > 0 else -_SCROLL_EVENT_DELTA) if dy else 0
+    pt_x = (_SCROLL_EVENT_DELTA if dx > 0 else -_SCROLL_EVENT_DELTA) if dx else 0
+    sequence = (
+        [(_SCROLL_PHASE_BEGAN, pt_y, pt_x)]
+        + [(_SCROLL_PHASE_CHANGED, pt_y, pt_x)] * n
+        + [(_SCROLL_PHASE_ENDED, 0, 0)]
+    )
+    for phase, py, px in sequence:
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, _scroll_event(x, y, phase, py, px))
+        time.sleep(_SCROLL_STEP_INTERVAL)
 
 
 _KEYCODES = {
