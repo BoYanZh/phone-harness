@@ -268,11 +268,26 @@ def _window_ax_nodes(app=None, win=None):
 
     out = []
 
+    _CHROME_SUBROLES = ("AXCloseButton", "AXMinimizeButton", "AXZoomButton")
+
+    def _is_titlebar_group(kids):
+        for k in (kids or []):
+            es, sub = _AS.AXUIElementCopyAttributeValue(k, "AXSubrole", None)
+            if not es and str(sub) in _CHROME_SUBROLES:
+                return True
+        return False
+
     def walk(node, depth=0):
         if depth > 6 or len(out) > 40:
             return
         e, role = _AS.AXUIElementCopyAttributeValue(node, "AXRole", None)
         role = "" if e else str(role)
+        es, subrole = _AS.AXUIElementCopyAttributeValue(node, "AXSubrole", None)
+        if not es and str(subrole) in _CHROME_SUBROLES:
+            return
+        ek, kids = _AS.AXUIElementCopyAttributeValue(node, "AXChildren", None)
+        if role == "AXGroup" and _is_titlebar_group(kids):
+            return
         if role in ("AXStaticText", "AXButton", "AXTextField",
                     "AXSecureTextField", "AXImage"):
             parts = []
@@ -281,7 +296,6 @@ def _window_ax_nodes(app=None, win=None):
                 if not ea and isinstance(v, str) and v.strip():
                     parts.append(v.strip())
             out.append((role, " ".join(parts), node))
-        ek, kids = _AS.AXUIElementCopyAttributeValue(node, "AXChildren", None)
         for k in (kids or []):
             walk(k, depth + 1)
 
