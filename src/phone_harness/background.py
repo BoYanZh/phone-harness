@@ -287,7 +287,7 @@ def drag(x1, y1, x2, y2, duration=0.35, steps=14):
 
 
 _SCROLL_PT_PER_EVENT = 7
-_SCROLL_EVENT_DELTA = 9
+_SCROLL_EVENT_DELTA = 12
 _SCROLL_STEP_INTERVAL = 0.008
 _SCROLL_PHASE_BEGAN, _SCROLL_PHASE_CHANGED, _SCROLL_PHASE_ENDED = 1, 2, 4
 
@@ -323,7 +323,7 @@ def _scroll_event(wid, gx, gy, lx, ly, phase, pt_y, pt_x):
     sf(96, pt_y)                                        # PointDeltaAxis1
     sf(93, int(pt_y * 65536 / 10))                      # FixedPtDeltaAxis1
     sf(11, -1 if pt_y < 0 else (1 if pt_y > 0 else 0))  # DeltaAxis1
-    sf(97, pt_x if pt_x else (-1 if pt_y else 0))       # PointDeltaAxis2
+    sf(97, pt_x)                                        # PointDeltaAxis2
     if pt_x:
         sf(94, int(pt_x * 65536 / 10))                  # FixedPtDeltaAxis2
         sf(12, -1 if pt_x < 0 else 1)                   # DeltaAxis2
