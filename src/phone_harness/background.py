@@ -30,7 +30,7 @@ Select with PHONE_HARNESS_BACKGROUND=1. Coordinates use the same global
 screen-point convention as the mirror backend and screen(), so every helper on
 top (tap_text, swipe, scroll_collect) works unchanged — just without focus.
 """
-import ctypes, ctypes.util, os, struct, subprocess, tempfile, time
+import ctypes, os, struct, subprocess, tempfile, time
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -45,8 +45,9 @@ from Foundation import NSBundle
 # Marking the in-memory bundle dictionary LSBackgroundOnly before any
 # registration check-in keeps Python background-only (foreground=0).
 try:
-    from AppKit import NSApplication
-    NSApplication.sharedApplication().setActivationPolicy_(2)
+    _bundle_info = NSBundle.mainBundle().infoDictionary()
+    if _bundle_info is not None:
+        _bundle_info["LSBackgroundOnly"] = "1"
 except Exception:
     pass
 
@@ -61,11 +62,12 @@ BUNDLE_ID = "com.apple.ScreenContinuity"
 TMP = Path(tempfile.gettempdir()) / "phone-harness"
 TMP.mkdir(exist_ok=True)
 
-# --- SkyLight private API ---
+# --- SkyLight & CoreServices private API ---
 _libc = ctypes.CDLL(None)
 _libc.mach_absolute_time.restype = ctypes.c_uint64
 _sky = ctypes.CDLL("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight")
-_appserv = ctypes.CDLL(ctypes.util.find_library("ApplicationServices"))
+_cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+_cs = ctypes.CDLL("/System/Library/Frameworks/CoreServices.framework/CoreServices")
 
 
 class _PSN(ctypes.Structure):
@@ -76,18 +78,53 @@ class _CGPoint(ctypes.Structure):
     _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
 
 
-_appserv.GetProcessForPID.argtypes = [ctypes.c_int, ctypes.POINTER(_PSN)]
-_appserv.GetProcessForPID.restype = ctypes.c_int
+_sky.SLSMainConnectionID.argtypes = []
+_sky.SLSMainConnectionID.restype = ctypes.c_uint32
+_sky.SLSMainConnectionID()
 _sky._SLPSSetFrontProcessWithOptions.argtypes = [
     ctypes.POINTER(_PSN), ctypes.c_uint32, ctypes.c_uint32]
 _sky.SLPSPostEventRecordTo.argtypes = [ctypes.POINTER(_PSN), ctypes.c_void_p]
 _sky.SLEventSetWindowLocation.argtypes = [ctypes.c_void_p, _CGPoint]
 _sky.SLEventSetWindowLocation.restype = ctypes.c_int
 
+_cf.CFNumberCreate.argtypes = [ctypes.c_void_p, ctypes.c_long, ctypes.c_void_p]
+_cf.CFNumberCreate.restype = ctypes.c_void_p
+_cf.CFArrayGetCount.argtypes = [ctypes.c_void_p]
+_cf.CFArrayGetCount.restype = ctypes.c_long
+_cf.CFArrayGetValueAtIndex.argtypes = [ctypes.c_void_p, ctypes.c_long]
+_cf.CFArrayGetValueAtIndex.restype = ctypes.c_void_p
+_cf.CFRelease.argtypes = [ctypes.c_void_p]
+
+_cs._LSCopyMatchingApplicationsWithItems.argtypes = [
+    ctypes.c_int, ctypes.c_int,
+    ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)]
+_cs._LSCopyMatchingApplicationsWithItems.restype = ctypes.c_void_p
+_cs._LSASNExtractHighAndLowParts.argtypes = [
+    ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32)]
+_cs._LSASNExtractHighAndLowParts.restype = ctypes.c_uint32
+_kLSPIDKey = ctypes.c_void_p.in_dll(_cs, "_kLSPIDKey")
+
 
 def _psn_for_pid(pid):
+    """Resolve a PID's ProcessSerialNumber via CoreServices without calling
+    HIServices.GetProcessForPID (which calls INIT_Processes -> _RegisterApplication
+    on the calling Python process and promotes it to a foreground GUI app)."""
     psn = _PSN()
-    _appserv.GetProcessForPID(pid, ctypes.byref(psn))
+    pid_val = ctypes.c_int64(int(pid))
+    num = _cf.CFNumberCreate(None, 4, ctypes.byref(pid_val))  # kCFNumberSInt64Type = 4
+    num_ptr = ctypes.c_void_p(num)
+    arr = _cs._LSCopyMatchingApplicationsWithItems(
+        -2, 1, ctypes.byref(_kLSPIDKey), ctypes.byref(num_ptr))
+    if arr and _cf.CFArrayGetCount(arr) >= 1:
+        asn = _cf.CFArrayGetValueAtIndex(arr, 0)
+        hi, lo = ctypes.c_uint32(), ctypes.c_uint32()
+        _cs._LSASNExtractHighAndLowParts(
+            asn, ctypes.byref(hi), ctypes.byref(lo))
+        psn.hi, psn.lo = hi.value, lo.value
+    if arr:
+        _cf.CFRelease(arr)
+    if num:
+        _cf.CFRelease(num)
     return psn
 
 
@@ -286,7 +323,7 @@ def _scroll_event(wid, gx, gy, lx, ly, phase, pt_y, pt_x):
     sf(96, pt_y)                                        # PointDeltaAxis1
     sf(93, int(pt_y * 65536 / 10))                      # FixedPtDeltaAxis1
     sf(11, -1 if pt_y < 0 else (1 if pt_y > 0 else 0))  # DeltaAxis1
-    sf(97, pt_x)                                        # PointDeltaAxis2
+    sf(97, pt_x if pt_x else (-1 if pt_y else 0))       # PointDeltaAxis2
     if pt_x:
         sf(94, int(pt_x * 65536 / 10))                  # FixedPtDeltaAxis2
         sf(12, -1 if pt_x < 0 else 1)                   # DeltaAxis2
