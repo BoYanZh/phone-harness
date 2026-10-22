@@ -627,7 +627,7 @@ def _scroll_event(x, y, phase, pt_y, pt_x):
     sf(96, pt_y)                                        # PointDeltaAxis1
     sf(93, int(pt_y * 65536 / 10))                      # FixedPtDeltaAxis1
     sf(11, -1 if pt_y < 0 else (1 if pt_y > 0 else 0))  # DeltaAxis1
-    sf(97, pt_x if pt_x else (-1 if pt_y else 0))       # PointDeltaAxis2
+    sf(97, pt_x)                                        # PointDeltaAxis2
     if pt_x:
         sf(94, int(pt_x * 65536 / 10))                  # FixedPtDeltaAxis2
         sf(12, -1 if pt_x < 0 else 1)                   # DeltaAxis2
