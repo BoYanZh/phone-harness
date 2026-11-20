@@ -86,7 +86,12 @@ That reaches the default phone. If it fails, use the sections below.
   or a number of minutes). New accounts get $5 of credit (100 Android minutes).
   A cloud Android emulator bills 5¢ a minute from that credit. A cloud iPhone is
   a real phone on a flat subscription, from $80 a month: it does not bill by the
-  minute.
+  minute. An account that has none yet reserves one with `phone-harness cloud
+  reserve`, for a $20 per phone refundable deposit: it prints a quote, which
+  is authoritative, and a link where the user pays
+  ([setup/cloud.md](https://github.com/phone-harness/phone-harness/blob/main/setup/cloud.md)).
+  Reservations are for iPhones only (with or without eSIM). Cloud Android
+  emulators are on the $20 plan and are not reserved.
 
 No uv? `pip install phone-harness` works too. Upgrade that install with
 `pip install -U phone-harness` (what `phone-harness update` prints for it).

@@ -366,6 +366,68 @@ now"). Links expire within fifteen minutes and with the session; the files
 are removed when the session ends. A link is a credential: do not paste one
 into notes or output.
 
+## Reserving a cloud phone
+
+An account gets a cloud iPhone, or more of them, by reserving them. A
+reservation is a place in a queue, held by a $20 per phone refundable deposit.
+The quote the command prints is authoritative: tell the user the amounts in
+it. You can start a reservation. Only the user can pay for it.
+
+```bash
+phone-harness cloud reserve --type iphone --plan monthly --qty 2 \
+    --use-case "Testing our listings app on real iPhones"   # prints the quote and a Stripe Checkout link
+phone-harness cloud reservations               # id, type, plan, qty, status, position, deposit, paid
+phone-harness cloud reservations ID            # one in full; an unpaid one shows its link again
+phone-harness cloud reservations cancel ID     # says what it would refund; --yes does it
+```
+
+- **Signed in first.** These commands need `phone-harness cloud login`, or
+  `PHONE_HARNESS_API_KEY`. A user with no account, or who will not sign in,
+  can reserve on the website instead: phone-harness.com/get-a-phone.
+- **Which phones.** Reservations are for iPhones only (with or without
+  eSIM). Cloud Android emulators are on the $20 plan and are not reserved.
+- **Ask first, and send the user's own answers.** `--type` is `iphone`, or
+  `iphone-esim` for one with an eSIM (a real number). `--plan` is `monthly` or
+  `annual`. `--qty` is 1 to 50, default 1. `--use-case` is what they want the
+  phones for, in their words. Do not make up a use case, a name or a number.
+- **You never pay.** `cloud reserve` prints a Stripe Checkout link. Give it to
+  the user, or pass `--open` to open it in their browser, and stop there: a
+  person types the card. Do not open the link on a phone you are driving, and
+  do not fill in a payment page.
+- **Nothing is held until the deposit is paid.** A new reservation is
+  `pending_payment`. When Stripe confirms the payment it becomes `queued` and
+  has a `position`. Do not tell the user a phone is reserved until
+  `cloud reservations` says `queued`. The link stops working after about a
+  day; reserve again for a new one.
+- **Queue order is paid time.** Places go in the order the deposits were
+  paid. Reserving again, or paying more, does not move one up.
+- **Read the quote as it is printed.** It is the deposit due now, refundable
+  in full while the reservation is queued, and the plan's first billing
+  period: one phone at the intro price when this customer has not had it
+  yet, the rest at the standard price. The plan starts when a phone is
+  handed over, and the deposit comes off that first bill. The amounts come
+  from the service with each quote; do not quote them from memory.
+- **The name is optional.** The reservation carries the account's name when
+  it has one. `--first-name` and `--last-name` put another name on it; pass
+  them only when the user gives you one.
+- **Cancel only when the user asks.** `cloud reservations cancel ID` with no
+  `--yes` prints what would be given up and refunded, and changes nothing.
+  Show the user that, then run it again with `--yes`. The refund is
+  automatic, to the card that paid: there is nothing to request. A queued
+  reservation is refunded in full; one that is part handed over refunds only
+  the phones still waiting. Once every phone has been handed over the cancel
+  is refused (`already_granted`): that deposit became a credit on the first
+  bill and is no longer refundable.
+- **The website has no list.** `cloud reservations` is the list. The website
+  shows one reservation's status page, from its link.
+- **Retrying.** A `cloud reserve` that failed part way prints an
+  `--idempotency-key`. Run the same command again with it to continue that
+  reservation, not start a second one.
+- **Five unpaid reservations an hour for one account.** Cancelling one does
+  not free a place; paying for one does. So do not reserve to "see the price"
+  and cancel: reserve when the user means it.
+- `--json` on any of these prints the API's own answer.
+
 ## Android
 
 The phone is reached over adb - a USB phone if plugged in, else the paired

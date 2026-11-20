@@ -109,6 +109,17 @@ phone-harness cloud stop             # ends the session; a saved Android is writ
 
 The same helpers drive a cloud phone: an Android over adb, an iPhone over HTTPS. `cloud start` takes a phone's name or id from `cloud ls`, or `ios` / `android`; with none it starts a temporary Android. `phone-harness cloud` lists every command.
 
+No cloud iPhone on the account yet, or need more of them? Reserve them with a $20 per phone refundable deposit. The command prints a quote, which is the authoritative figure, and a Stripe Checkout link. You pay in your browser, and that payment is what holds your place in the queue, which is in the order deposits were paid; the CLI never pays for you.
+
+```bash
+phone-harness cloud reserve --type iphone --plan monthly --qty 2 \
+  --use-case "Testing our app on real iPhones" --open
+phone-harness cloud reservations             # status, place in the queue, deposit, when it was paid
+phone-harness cloud reservations cancel ID   # leave the queue; the deposit still held goes back to the card that paid
+```
+
+`--type` is `iphone` or `iphone-esim`, and `--plan` is `monthly` or `annual`. Reservations are for iPhones only (with or without eSIM). Cloud Android emulators are on the $20 plan and are not reserved. The plan starts when a phone is handed over; the deposit comes off its first bill and is then no longer refundable. An account can have five unpaid reservations an hour, and cancelling one does not free a place.
+
 ## How it works
 
 Every phone sits behind the same helpers, so a script written for one runs on the others.

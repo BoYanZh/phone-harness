@@ -80,6 +80,8 @@ class HelpAndFlags(unittest.TestCase):
             "phone": "--yes",
             "keys": "--json",
             "history": "--limit",
+            "reserve": "--idempotency-key",
+            "reservations": "--yes",
         }
         for name, flag in cloud_cmds.items():
             help_out = _run("cloud", name, "--help")

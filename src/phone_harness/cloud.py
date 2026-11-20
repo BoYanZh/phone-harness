@@ -22,6 +22,7 @@ import argparse
 import json
 import math
 import os
+import re
 import shutil
 import sys
 import time
@@ -1751,6 +1752,514 @@ def _history(args):
     return 0
 
 
+# --- reservations ------------------------------------------------------------
+#
+# Asking for an iPhone the account does not have yet. `cloud reserve` sends
+# what is wanted and gets back a quote and a Stripe Checkout link for a
+# refundable deposit. A person pays that in a browser: this CLI holds no card
+# and never pays. Until the deposit is paid the reservation holds no place in
+# the queue, so nothing here says "reserved" before the API says `queued`.
+#
+# Every amount printed about a reservation is one the API sent. The one figure
+# written in this file is in IPHONES_ONLY, and is not a reservation's.
+
+# What --type takes, and the API's word for it. Only iPhones are reserved.
+RESERVE_TYPES = {"iphone": "iphone", "iphone-esim": "iphone_esim", "iphone_esim": "iphone_esim"}
+# What someone who asks to reserve an Android is told. The docs and the MCP
+# server say it in the same words; tests/test_pricing_copy.py holds the docs
+# to them.
+IPHONES_ONLY = ("Reservations are for iPhones only (with or without eSIM). "
+                "Cloud Android emulators are on the $20 plan and are not reserved.")
+RESERVE_PLANS = ("monthly", "annual")
+RESERVE_MAX_QUANTITY = 50          # the API's limit for one reservation
+RESERVE_MAX_USE_CASE = 2000        # and for the free text
+RESERVE_TIMEOUT = 75               # the API talks to Stripe before it answers
+# The only place the API sends anyone to pay.
+CHECKOUT_HOST = "checkout.stripe.com"
+_RESERVATION_ID = re.compile(r"rsv_[a-f0-9]{24}")
+# What the API says of an id that names none of the account's reservations. Any
+# other 404 may be an API with no reservation routes; see _reservations_live.
+_NO_SUCH_RESERVATION = "No such reservation"
+_IDEMPOTENCY_KEY = re.compile(r"[A-Za-z0-9_-]{16,128}")
+# The API's phone types as they are shown. One these do not name (a
+# reservation from when another phone was offered) shows as the API's own
+# word, and can be cancelled like any other.
+_TYPE_WORDS = {"iphone": "iphone", "iphone_esim": "iphone-esim"}
+_TYPE_LABELS = {"iphone": "iPhone", "iphone_esim": "iPhone with eSIM"}
+_TIER_WORDS = {"intro": "intro price, once per customer", "standard": "standard price"}
+
+RESERVE_USAGE = (
+    "Usage: phone-harness cloud reserve --type iphone|iphone-esim --plan monthly|annual\n"
+    "         [--qty N] --use-case TEXT [--first-name NAME] [--last-name NAME]\n"
+    "         [--open] [--json] [--idempotency-key KEY]")
+RESERVATIONS_USAGE = (
+    "Usage: phone-harness cloud reservations [ID] [--json]\n"
+    "       phone-harness cloud reservations cancel ID [--yes] [--json]")
+
+
+def _amount(cents, currency="usd"):
+    """Integer cents as money. Dollars get the sign; any other currency its code."""
+    if isinstance(cents, bool) or not isinstance(cents, (int, float)):
+        return "?"
+    if str(currency or "usd").lower() == "usd":
+        return f"${cents / 100:,.2f}"
+    return f"{cents / 100:,.2f} {str(currency).upper()}"
+
+
+def _type_word(phone_type):
+    """The API's phone type, as --type spells it."""
+    return _TYPE_WORDS.get(phone_type, str(phone_type or "-"))
+
+
+def _phones_words(reservation):
+    """'3 x iPhone with eSIM, monthly'."""
+    kind = reservation.get("phone_type")
+    return (f"{reservation.get('quantity', '?')} x {_TYPE_LABELS.get(kind, kind or 'phone')}, "
+            f"{reservation.get('plan') or '?'}")
+
+
+def _in(ts):
+    """How far off a time is: '45 min', '23 hours', '3 days'; 'expired' once past."""
+    try:
+        left = float(ts) - time.time()
+    except (TypeError, ValueError):
+        return "?"
+    if left <= 0:
+        return "expired"
+    if left < 90 * 60:
+        return f"{max(1, math.ceil(left / 60))} min"
+    if left < 48 * 3600:
+        return f"{round(left / 3600)} hours"
+    return f"{round(left / 86400)} days"
+
+
+def _split_equals(args, names):
+    """`--use-case=text` as the two words `--use-case text`, for these options."""
+    out = []
+    for word in args:
+        name, eq, value = word.partition("=")
+        out.extend([name, value] if eq and name in names else [word])
+    return out
+
+
+def _checkout_url(reservation):
+    """The reservation's payment link, or None when it is not Stripe Checkout.
+
+    Someone is about to type a card number into this page. The API only ever
+    sends people to Stripe's own Checkout host, so a link anywhere else is
+    never printed as the place to pay and never opened."""
+    url = reservation.get("checkout_url")
+    if not isinstance(url, str) or any(ch <= " " or ch == "\x7f" for ch in url):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host, user = parts.hostname, parts.username or parts.password
+    except ValueError:
+        return None
+    if parts.scheme != "https" or host != CHECKOUT_HOST or user:
+        return None
+    return url
+
+
+def _open_link(url):
+    """Open a link the user asked for with --open. Not `_open_browser`: that is
+    `cloud start` showing a live view nobody asked for, which `cloud.watch` turns off."""
+    try:
+        return bool(webbrowser.open(url))
+    except Exception:
+        return False
+
+
+def _quote_rows(reservation):
+    """(label, text) rows for the quote the API stored with a reservation: the
+    deposit due now, then the plan's first billing period one price at a time.
+    A phone with no price yet has a deposit and says the price comes later."""
+    quote = reservation.get("quote") or {}
+    currency = quote.get("currency") or "usd"
+    deposit = quote.get("deposit") or {}
+    period = "first " + {"month": "month", "year": "year"}.get(quote.get("interval"), "period")
+    rows = []
+    total = deposit.get("total_cents")
+    if total is not None:
+        per, phones = deposit.get("per_phone_cents"), deposit.get("phones")
+        each = f" ({phones} x {_amount(per, currency)})" if per is not None and phones else ""
+        back = ", refundable in full while queued" if deposit.get("refundable") else ""
+        rows.append(("deposit", f"{_amount(total, currency)} due now{each}{back}"))
+    lines = quote.get("lines") or []
+    if not quote.get("priced") or not lines:
+        rows.append((period, "price confirmed before handover"))
+        return rows
+    for i, line in enumerate(lines):
+        tier = line.get("tier")
+        price = (f"{line.get('quantity')} x {_amount(line.get('unit_cents'), currency)} "
+                 f"{_TIER_WORDS.get(tier, tier or 'price')}")
+        rows.append((period if i == 0 else "", price))
+    first, later = quote.get("first_period_cents"), quote.get("due_at_handover_cents")
+    if first is not None:
+        after = f"; {_amount(later, currency)} due at handover, after the deposit" if later is not None else ""
+        rows.append(("", f"{_amount(first, currency)} in all{after}"))
+    return rows
+
+
+def _deposit_words(reservation):
+    """A reservation's deposit in a few words: what is due, held, or gone back."""
+    deposit = reservation.get("deposit") or {}
+    currency = deposit.get("currency") or "usd"
+    status = reservation.get("status")
+    if status == "pending_payment":
+        due = ((reservation.get("quote") or {}).get("deposit") or {}).get("total_cents")
+        return f"{_amount(due, currency)} due" if due is not None else "due"
+    paid, held = deposit.get("paid_cents") or 0, deposit.get("refundable_cents") or 0
+    credited, refunded = deposit.get("credited_cents") or 0, deposit.get("refunded_cents") or 0
+    if not paid:
+        return "-"                                   # given up before anything was charged
+    if status == "cancelling":
+        return f"{_amount(held, currency)} refund pending"
+    words = []
+    if status == "queued":
+        words.append(f"{_amount(paid, currency)} paid")
+        if held != paid:
+            words.append(f"{_amount(held, currency)} refundable")
+    else:                                            # no longer waiting: where the money went
+        if credited:
+            words.append(f"{_amount(credited, currency)} credited")
+        if refunded:
+            words.append(f"{_amount(refunded, currency)} refunded")
+    return ", ".join(words) or f"{_amount(paid, currency)} paid"
+
+
+def _format_reservations(rows):
+    """Text table for `cloud reservations`, sized to its cells like `cloud ls`."""
+    header = ["ID", "TYPE", "PLAN", "QTY", "STATUS", "POSITION", "DEPOSIT", "PAID"]
+    body = []
+    for r in rows:
+        body.append([
+            str(r.get("reservation_id") or "-"),
+            _type_word(r.get("phone_type")),
+            str(r.get("plan") or "-"),
+            str(r.get("quantity") if r.get("quantity") is not None else "-"),
+            str(r.get("status") or "-"),
+            str(r["position"]) if r.get("position") is not None else "-",
+            _deposit_words(r),
+            _ago(r["paid_at"]) if r.get("paid_at") else "-",
+        ])
+    widths = [max(len(header[i]), *(len(cells[i]) for cells in body)) for i in range(len(header))]
+
+    def render(cells):
+        padded = [cells[i].ljust(widths[i]) for i in range(len(cells) - 1)]
+        padded.append(cells[-1])
+        return "  ".join(padded).rstrip()
+
+    return "\n".join([render(header), *(render(cells) for cells in body)])
+
+
+def _print_rows(rows):
+    for label, text in rows:
+        print(f"  {label:<12} {text}".rstrip())
+
+
+def _pay_rows(reservation):
+    """Where to pay an unpaid reservation's deposit, and until when."""
+    url = _checkout_url(reservation)
+    if not url:
+        missing = ("no payment link yet; `phone-harness cloud reservations "
+                   f"{reservation.get('reservation_id')}` shows it once there is one")
+        if reservation.get("checkout_url"):
+            missing = ("the payment link the API sent is not a Stripe Checkout page "
+                       f"(https://{CHECKOUT_HOST}); it is not shown")
+        return [("pay", missing)]
+    rows = [("pay", url)]
+    if reservation.get("expires_at"):
+        left = _in(reservation["expires_at"])
+        # By this machine's clock, which may be wrong: say so, and leave the link in view.
+        rows.append(("", "the link has expired; if it no longer opens, reserve again"
+                     if left == "expired" else f"the link works for another {left}"))
+    return rows
+
+
+def _print_reservation(reservation):
+    """One reservation in full: where it stands, its deposit, and its quote."""
+    rid = reservation.get("reservation_id")
+    status = reservation.get("status")
+    rows = [("reservation", str(rid)), ("status", str(status))]
+    if reservation.get("detail"):
+        rows.append(("", str(reservation["detail"])))
+    rows.append(("phones", _phones_words(reservation)))
+    if reservation.get("position") is not None:
+        rows.append(("position", f"{reservation['position']} in the queue"))
+    if reservation.get("granted"):
+        handed = f"{reservation['granted']} of {reservation.get('quantity')}"
+        if reservation.get("queued"):
+            handed += f"; {reservation['queued']} still waiting"
+        if reservation.get("ended"):
+            handed += f"; the plan has ended for {reservation['ended']}"
+        rows.append(("handed over", handed))
+    if status == "pending_payment":
+        rows += _quote_rows(reservation) + _pay_rows(reservation)
+    else:
+        rows.append(("deposit", _deposit_words(reservation)))
+        if reservation.get("paid_at"):
+            rows.append(("paid", _ago(reservation["paid_at"])))
+        if status == "queued":            # what the plan will cost once a phone is handed over
+            rows += [row for row in _quote_rows(reservation) if row[0] != "deposit"]
+    _print_rows(rows)
+    if reservation.get("can_cancel"):
+        print(term.note(f"  cancel       phone-harness cloud reservations cancel {rid}"))
+
+
+def _explain_reservation(e, rid=None, retry=None):
+    """A CloudError from the reservation routes, as what to do next.
+
+    The API's `error` is a sentence written for a customer and is shown as it
+    is; its `code` decides what is added. `retry` is the command that safely
+    repeats a request Stripe did not finish. A 403 here is never the "not
+    enabled for phones yet" that `_explain` makes of one."""
+    if e.status == 401 or e.code == "account_blocked":
+        return _explain(e)
+    said = str(e)
+    if e.status == 404 and rid and (said == _NO_SUCH_RESERVATION or _reservations_live()):
+        return f"No reservation {rid} on this account. `phone-harness cloud reservations` lists them."
+    if e.status == 404:
+        # The route itself is missing: an API from before reservations.
+        return (f"{_target('API')} does not take reservations yet, so a phone cannot be reserved, "
+                "listed or cancelled through it. Nothing was changed.")
+    if e.code == "plan_unavailable":
+        return f"{said} Choose another --type or --plan."
+    if e.code == "idempotency_conflict":
+        return ("That --idempotency-key was already used for a different request. Leave it out to "
+                "start a new reservation, or repeat the options it was first used with.")
+    if e.code == "rate_limited":
+        return (f"{said} Cancelling one does not free a place; paying for one does. "
+                "`phone-harness cloud reservations` lists the unfinished ones.")
+    if e.code == "payments_unavailable":
+        return (f"{said} Nothing {'changed' if rid else 'was charged'}."
+                + (f" To retry safely, {retry}." if retry else ""))
+    if e.code == "refund_unconfirmed":
+        return (f"{said} Asking again never refunds twice."
+                + (f" To retry the refund, {retry}." if retry else ""))
+    if e.code in ("already_granted", "grant_in_progress"):
+        return f"Not cancelled. {said}"
+    if e.status in (400, 403, 409, 429):
+        return said
+    return f"{said} (HTTP {e.status})"
+
+
+def _reservations_live():
+    """Whether this API has reservation routes at all.
+
+    A 404 for one reservation does not say. An API from before reservations
+    answers 404 for every path under /reservations, and "no reservation of
+    yours has that id" would be the wrong thing to tell someone then. The
+    list is the one route with no id in it, so it is asked once."""
+    try:
+        _api("GET", "/reservations")
+    except CloudError as e:
+        return e.status != 404
+    except OSError:
+        pass                    # cannot tell; the first answer stands
+    return True
+
+
+def _reservation_api(method, path, rid=None, **kw):
+    """`_api`, with an HTTP error explained as a reservation error."""
+    try:
+        return _api(method, path, **kw)
+    except CloudError as e:
+        sys.exit(_explain_reservation(e, rid=rid))
+
+
+def _listed():
+    """The account's reservations as the API lists them, newest first."""
+    found = _reservation_api("GET", "/reservations")
+    rows = found.get("reservations") if isinstance(found, dict) else found
+    return [row for row in rows or [] if isinstance(row, dict)]
+
+
+def _reserve(args):
+    args = _split_equals(list(args), ("--type", "--plan", "--qty", "--quantity", "--use-case",
+                                      "--first-name", "--last-name", "--idempotency-key"))
+    kind = _option(args, "--type")
+    plan = _option(args, "--plan")
+    qty = _option(args, "--qty", "--quantity")
+    use_case = _option(args, "--use-case")
+    first, last = _option(args, "--first-name"), _option(args, "--last-name")
+    key = _option(args, "--idempotency-key")
+    as_json, open_it = _flag(args, "--json"), _flag(args, "--open")
+    if args:
+        sys.exit(RESERVE_USAGE)
+    if kind is not None and kind.lower().startswith("android"):
+        sys.exit(f"{IPHONES_ONLY}\n{RESERVE_USAGE}")
+    if kind not in RESERVE_TYPES:
+        sys.exit(f"--type must be iphone or iphone-esim, not {kind!r}.\n{RESERVE_USAGE}"
+                 if kind is not None else f"--type is required.\n{RESERVE_USAGE}")
+    if plan not in RESERVE_PLANS:
+        sys.exit(f"--plan must be monthly or annual, not {plan!r}.\n{RESERVE_USAGE}"
+                 if plan is not None else f"--plan is required.\n{RESERVE_USAGE}")
+    quantity = 1 if qty is None else _int(qty, "--qty")
+    if not 1 <= quantity <= RESERVE_MAX_QUANTITY:
+        sys.exit(f"--qty must be between 1 and {RESERVE_MAX_QUANTITY}, not {quantity}.")
+    use_case = (use_case or "").strip()
+    if not use_case:
+        sys.exit("--use-case is required: say in a sentence what the phone is for.")
+    if len(use_case) > RESERVE_MAX_USE_CASE:
+        sys.exit(f"--use-case is {len(use_case)} characters; the most is {RESERVE_MAX_USE_CASE}.")
+    if key is not None and not _IDEMPOTENCY_KEY.fullmatch(key):
+        sys.exit("--idempotency-key must be 16 to 128 letters, digits, underscores or hyphens.")
+
+    body = {"phone_type": RESERVE_TYPES[kind], "plan": plan, "quantity": quantity, "use_case": use_case}
+    for field, value in (("first_name", first), ("last_name", last)):
+        if value is not None and value.strip():
+            body[field] = value.strip()
+    key = key or uuid.uuid4().hex
+    headers = {"Idempotency-Key": key}
+    again = f"run the same command again with `--idempotency-key {key}`"
+    try:
+        try:
+            made = _api("POST", "/reservations", body, headers=headers, timeout=RESERVE_TIMEOUT)
+        except OSError:
+            # The answer was lost, which does not say the request was. The same
+            # key and body is the same reservation, never a second one.
+            made = _api("POST", "/reservations", body, headers=headers, timeout=RESERVE_TIMEOUT)
+    except CloudError as e:
+        sys.exit(_explain_reservation(e, retry=again))
+    except OSError as e:
+        sys.exit(f"Could not reach {_target('API')}: {e}\nThe request may still have arrived. "
+                 f"To continue it instead of starting a second reservation, {again}.")
+
+    if not isinstance(made, dict) or not made.get("reservation_id"):
+        sys.exit(f"{_target('API')} answered with something that is not a reservation. "
+                 f"To find out whether one was started, {again}.")
+    unpaid = made.get("status") == "pending_payment"
+    url = _checkout_url(made)
+    rid = made["reservation_id"]
+    if as_json:
+        print(json.dumps(made, indent=2))
+    elif not unpaid:
+        # A key that was used before answers with what that reservation is now.
+        print(f"Reservation {rid} already exists for this key; no new one was started.")
+        _print_reservation(made)
+    else:
+        print(f"{term.mark()} Reservation {rid} started: {_phones_words(made)}.")
+        print("  It holds no place in the queue until the deposit is paid.")
+        _print_rows(_quote_rows(made) + _pay_rows(made))
+    # Opened last, so the link is already on screen whatever the browser does.
+    if open_it and url and unpaid:
+        opened = _open_link(url)
+        if not as_json:
+            _print_rows([("", "opened in your browser" if opened else
+                          "could not open a browser here; open the link yourself")])
+    if as_json or not unpaid:
+        return 0
+    print(term.note(f"  status       phone-harness cloud reservations {rid}"))
+    return 0 if url else 1
+
+
+def _find_reservation(given):
+    """One of the account's reservations, by its id or a unique prefix of it."""
+    if _RESERVATION_ID.fullmatch(given):
+        return _reservation_api("GET", f"/reservations/{given}", rid=given)
+    hits = [r for r in _listed() if given and str(r.get("reservation_id") or "").startswith(given)]
+    if len(hits) != 1:
+        sys.exit(f"{given!r} matches {len(hits)} reservations"
+                 + (f": {', '.join(str(r['reservation_id']) for r in hits)}" if hits
+                    else ". `phone-harness cloud reservations` lists them."))
+    return hits[0]
+
+
+def _cancel_words(reservation):
+    """What cancelling this reservation gives up and gives back, before asking."""
+    deposit = reservation.get("deposit") or {}
+    back = _amount(deposit.get("refundable_cents") or 0, deposit.get("currency") or "usd")
+    lead = f"Reservation {reservation.get('reservation_id')}: {_phones_words(reservation)}"
+    if reservation.get("status") == "pending_payment":
+        return (f"{lead}, deposit not paid.\nNothing was charged, so nothing is refunded. "
+                "Cancelling closes its payment link.")
+    place = (f", position {reservation['position']} in the queue"
+             if reservation.get("position") is not None else "")
+    if reservation.get("granted"):
+        return (f"{lead}{place}.\nCancelling gives up the {reservation.get('queued') or 0} still "
+                f"waiting and refunds {back} to the card that paid. What was already handed over "
+                f"({reservation['granted']} of {reservation.get('quantity')}) is not affected.")
+    return f"{lead}{place}.\nCancelling gives up that place and refunds {back} to the card that paid."
+
+
+def _cancel_reservation(given, yes, as_json):
+    before = _find_reservation(given)
+    rid = str(before.get("reservation_id") or given)
+    again = f"phone-harness cloud reservations cancel {rid} --yes"
+    # Asked only when there is something to give up. A refund that is still
+    # owed, or a reservation already gone, has nothing left to confirm.
+    if before.get("can_cancel") and not yes:
+        if as_json or not sys.stdin.isatty():     # nobody to ask: say what it would do, and how
+            sys.exit(f"{_cancel_words(before)}\nNot cancelled. To confirm, run: {again}")
+        print(_cancel_words(before))
+        if input("Cancel this reservation? [y/N] ").strip().lower() not in ("y", "yes"):
+            print("Not cancelled.")
+            return 1
+    try:
+        done = _api("POST", f"/reservations/{urllib.parse.quote(rid, safe='')}/cancel",
+                    timeout=RESERVE_TIMEOUT)
+    except CloudError as e:
+        sys.exit(_explain_reservation(e, rid=rid, retry=f"run `{again}`"))
+    except OSError as e:
+        sys.exit(f"Could not reach {_target('API')}: {e}\nThe cancel may still have gone through. "
+                 f"`phone-harness cloud reservations {rid}` shows where it stands, and asking "
+                 "again never refunds twice.")
+    if as_json:
+        print(json.dumps(done, indent=2))
+        return 0
+    currency = (done.get("deposit") or {}).get("currency") or "usd"
+    refunded = done.get("refunded_cents") or 0
+    back = f" {_amount(refunded, currency)} is on its way back to the card that paid."
+    status = done.get("status")
+    if status == "cancelled" and before.get("status") == "cancelled":
+        print(f"Reservation {rid} was already cancelled. Nothing to refund.")
+    elif status == "cancelled":
+        print(f"{term.mark()} Reservation {rid} cancelled."
+              + (back if refunded else " Nothing had been charged."))
+    elif status == "granted":
+        print(f"{term.mark()} Left the queue for the phones still waiting on {rid}."
+              + (back if refunded else ""))
+    else:
+        print(f"Reservation {rid} is now {status}. If a refund is owed and has not arrived, "
+              f"run the same command again: {again}")
+    if done.get("detail"):
+        print(term.note(f"  {done['detail']}"))
+    return 0
+
+
+def _reservations(args):
+    args = list(args)
+    as_json, yes = _flag(args, "--json"), _flag(args, "--yes")
+    if any(a.startswith("-") for a in args):
+        sys.exit(RESERVATIONS_USAGE)
+    if args[:1] == ["cancel"]:
+        if len(args) != 2:
+            sys.exit(RESERVATIONS_USAGE)
+        return _cancel_reservation(args[1], yes, as_json)
+    if yes or len(args) > 1:
+        sys.exit(RESERVATIONS_USAGE)
+    if args:
+        found = _find_reservation(args[0])
+        if as_json:
+            print(json.dumps(found, indent=2))
+        else:
+            _print_reservation(found)
+        return 0
+    rows = _listed()
+    if as_json:
+        print(json.dumps(rows, indent=2))
+        return 0
+    if not rows:
+        print("No reservations. `phone-harness cloud reserve` starts one.")
+        return 0
+    print(_format_reservations(rows))
+    if any(r.get("status") == "pending_payment" for r in rows):
+        print(term.note("pending_payment holds no place until its deposit is paid: "
+                        "`phone-harness cloud reservations ID` shows the link."))
+    return 0
+
+
 # --- CLI (phone-harness cloud ...) -------------------------------------------
 
 CLI_USAGE = """Usage:
@@ -1779,6 +2288,22 @@ CLI_USAGE = """Usage:
   phone-harness cloud phone [reset --yes]      the saved Android. reset --yes wipes its stored state
   phone-harness cloud keys [create [LABEL] | revoke HASH]   API keys, for CI
   phone-harness cloud history [-n NUM] [--json]
+  phone-harness cloud reserve --type iphone|iphone-esim --plan monthly|annual
+                              [--qty N] --use-case TEXT [--first-name NAME] [--last-name NAME]
+                              [--open] [--json] [--idempotency-key KEY]
+                                               ask for cloud iPhones (--qty 1 to 50, default 1) before the
+                                               account has them. Prints the quote and a Stripe Checkout
+                                               link for the refundable deposit; a person pays it in a
+                                               browser, and nothing is held until then. --open opens
+                                               the link. The names go on the reservation in place of
+                                               the account's. Five unpaid reservations an hour for one
+                                               account; cancelling one does not free a place
+  phone-harness cloud reservations [ID] [--json]
+                                               the account's reservations: status, place in the queue,
+                                               deposit, when it was paid. ID or a unique prefix shows one
+  phone-harness cloud reservations cancel ID [--yes]
+                                               give the place up; the deposit still held is refunded.
+                                               Refused once every phone has been handed over
 Every command takes --session SID, or PHONE_HARNESS_SESSION, and so do helper
 scripts: that pins one phone for this process. With neither, helpers follow the
 attached session (the last start, or cloud use). SID may be a unique prefix.
@@ -1789,7 +2314,8 @@ They may live in a .env file at the repo root or in the agent workspace (never c
 
 _COMMANDS = {"login": _login, "logout": _logout, "whoami": _whoami, "start": _start,
              "stop": _stop, "ls": _ls, "show": _show, "use": _use, "watch": _watch, "open": _open,
-             "phone": _phone, "keys": _keys, "history": _history}
+             "phone": _phone, "keys": _keys, "history": _history,
+             "reserve": _reserve, "reservations": _reservations}
 
 
 def _cloud_parsers():
@@ -1890,6 +2416,42 @@ def _cloud_parsers():
                          help="how many sessions to show (default 20)")
     history.add_argument("--json", action="store_true", help="print the sessions as JSON")
     parsers["history"] = history
+
+    reserve = make(
+        "reserve", RESERVE_USAGE[len("Usage: "):],
+        "Ask for cloud iPhones before the account has them. Prints the quote the API "
+        "gives (the deposit due now, and the plan's first billing period at the intro "
+        "and standard prices) and a Stripe Checkout link for the deposit, which is "
+        "refundable while the reservation is queued. A person pays it in a browser: "
+        "this command never pays, and the reservation holds no place until it is paid. "
+        + IPHONES_ONLY)
+    reserve.add_argument("--type", metavar="TYPE", help="iphone, or iphone-esim for one with an eSIM")
+    reserve.add_argument("--plan", metavar="PLAN", help="monthly or annual")
+    reserve.add_argument("--qty", "--quantity", metavar="N",
+                         help=f"how many phones, 1 to {RESERVE_MAX_QUANTITY} (default 1)")
+    reserve.add_argument("--use-case", metavar="TEXT", help="what the phones are for, in a sentence")
+    reserve.add_argument("--first-name", metavar="NAME",
+                         help="the name to put on the reservation, in place of the account's")
+    reserve.add_argument("--last-name", metavar="NAME", help="likewise")
+    reserve.add_argument("--open", action="store_true", help="open the Checkout link in the browser")
+    reserve.add_argument("--json", action="store_true", help="print the reservation as JSON")
+    reserve.add_argument("--idempotency-key", metavar="KEY",
+                         help="repeat a request that may have got through: the same key and "
+                              "options answer with the same reservation (16 to 128 letters, "
+                              "digits, _ or -). One is made up when this is left out")
+    parsers["reserve"] = reserve
+
+    reservations = make(
+        "reservations", RESERVATIONS_USAGE[len("Usage: "):],
+        "The account's reservations: status, place in the queue, deposit, and when it "
+        "was paid. ID, or a unique prefix of one, shows that reservation with its quote "
+        "and, while it is unpaid, its Checkout link. cancel ID gives the place up and "
+        "refunds the deposit still held; it is refused once every phone has been "
+        "handed over.")
+    reservations.add_argument("--json", action="store_true", help="print the API's answer as JSON")
+    reservations.add_argument("--yes", action="store_true",
+                              help="cancel without being asked to confirm")
+    parsers["reservations"] = reservations
     return parsers
 
 

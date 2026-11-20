@@ -46,3 +46,41 @@ billed annually ($768 or $960 a year). It does not bill by the minute, so it
 can stay running.
 A cloud iPhone is a separate phone from the user's own, with its own apps
 and logins; if an app asks for an Apple ID or any sign-in, ask the user.
+
+## Reserve a phone
+
+An account with no cloud iPhone yet, or one that needs more of them, reserves
+them:
+
+```bash
+phone-harness cloud reserve --type iphone --plan monthly --qty 2 \
+  --use-case "What the phones are for"
+phone-harness cloud reservations              # status and place in the queue
+phone-harness cloud reservations cancel ID    # leave the queue; the deposit is refunded
+```
+
+`--type` is `iphone` or `iphone-esim`; `--plan` is `monthly` or
+`annual`; `--qty` is 1 to 50. Reserving takes a $20 per phone refundable
+deposit. The command prints a quote, which is authoritative, and a Stripe
+Checkout link. The user opens the link and pays (`--open` opens it for them).
+That payment is what holds a place in the queue: until it is made, nothing is
+reserved. The plan starts when a phone is handed over, and the deposit comes
+off its first bill. The reservation carries the account's name;
+`--first-name` and `--last-name` put another one on it.
+
+- Reservations are for iPhones only (with or without eSIM). Cloud Android
+  emulators are on the $20 plan and are not reserved.
+- These commands need a signed-in account (`cloud login`, or
+  `PHONE_HARNESS_API_KEY`). Without one, reserve at phone-harness.com/get-a-phone.
+- The queue is in the order deposits were paid. Nothing moves a place up.
+- Cancelling refunds the deposit still held automatically, to the card that
+  paid; a reservation that is part handed over refunds only the phones still
+  waiting, and a phone that was handed over has had its deposit credited to
+  its first bill.
+- The website has no list of reservations: `cloud reservations` is the list,
+  and the website shows one reservation's status page from its link.
+- An account can have five unpaid reservations an hour. Cancelling one does not
+  free a place; paying for one does.
+
+Never pay, or fill in a payment page, for the user. Cancel a reservation only
+when they ask.

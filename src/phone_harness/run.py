@@ -127,10 +127,36 @@ class _StreamTail:
         return getattr(self._wrapped, name)
 
 
+# What may be recorded of a `cloud reserve` or `cloud reservations` command
+# line: its own flags and the fixed words they take. Anything else on it is a
+# person's name, what they want a phone for, a retry key, or a reservation id
+# (which opens that reservation's status page), and none of that is telemetry.
+_RESERVATION_FLAGS = frozenset({
+    "--type", "--plan", "--qty", "--quantity", "--use-case", "--first-name", "--last-name",
+    "--idempotency-key", "--open", "--json", "--yes", "--help", "-h"})
+_RESERVATION_WORDS = frozenset({
+    "cancel", "iphone", "iphone-esim", "iphone_esim", "monthly", "annual"})
+
+
+def _reservation_argv(words):
+    def plain(word):
+        return word in _RESERVATION_WORDS or word.isdigit()
+
+    masked = []
+    for word in words:
+        flag, equals, value = word.partition("=")
+        if equals and flag in _RESERVATION_FLAGS:
+            masked.append(f"{flag}={value if plain(value) else '<redacted>'}")
+        else:
+            masked.append(word if word in _RESERVATION_FLAGS or plain(word) else "<redacted>")
+    return masked
+
+
 def _telemetry_argv(args):
     """The command line as cli_event records it. `--session SID` is left out:
     the pinned session is the event's session_id. An Android pairing code is
-    masked: it is a credential."""
+    masked: it is a credential. So is everything free on a reservation
+    command (see _RESERVATION_FLAGS)."""
     argv, words = [], iter(args)
     for word in words:
         if word == "--session":
@@ -139,6 +165,8 @@ def _telemetry_argv(args):
             argv.append(word)
     if argv[:2] == ["android", "pair"]:
         argv[2:] = ["<code>" if word.isdigit() else word for word in argv[2:]]
+    if argv[:1] == ["cloud"] and argv[1:2] in (["reserve"], ["reservations"]):
+        argv[2:] = _reservation_argv(argv[2:])
     return argv
 
 

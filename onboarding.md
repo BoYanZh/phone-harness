@@ -91,6 +91,14 @@ in the summary and move on. If yes:
   stop`. Keep it to a few minutes: a cloud Android bills by the minute and the
   credit is theirs. (A cloud iPhone is a flat subscription: it does not bill by
   the minute.)
+- A user who wants a cloud iPhone and has none on the account (`phone-harness
+  cloud ls` lists no iOS phone) reserves one: ask whether it should have an
+  eSIM, which plan, how many, and what it is for, then `phone-harness cloud
+  reserve ...`. Reserving takes a $20 per phone refundable deposit. The
+  command prints a quote, which is authoritative, and a Stripe Checkout link.
+  Hand them the link and stop: paying is theirs, like signing up.
+  Reservations are for iPhones only (with or without eSIM). Cloud Android
+  emulators are on the $20 plan and are not reserved.
 
 ## Rules
 
