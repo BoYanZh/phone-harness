@@ -154,6 +154,10 @@ local check fails it also points at the cloud. Common ones:
   network than the Mac. `adb devices` shows what adb sees.
 - **Android — `locked`**: unlock the phone; `phone-harness android awake` keeps
   it awake for the session. The harness never types a PIN.
+- **Cloud iPhone — `the cloud iPhone is locked or asleep`**: it was left alone
+  and went to sleep. `wake()` wakes it and the step can run again. A cloud
+  iPhone is set up with no passcode, so there is nothing to type and nothing
+  to ask the user for.
 - **Android — the tree is unavailable on some screen**: that screen never goes
   idle (something animates), so `uiautomator` refuses; read `screenshot()`
   instead or move to a screen that settles.

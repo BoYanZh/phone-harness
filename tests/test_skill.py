@@ -91,6 +91,43 @@ class SkillOutput(unittest.TestCase):
             self.assertIn(rule, text)
         self.assertNotIn("`android`", text)                # not a --type
 
+    def test_skill_says_how_to_wake_a_cloud_iphone_and_that_it_has_no_passcode(self):
+        """An agent that meets a lock screen has to know one call gets past it, and not to ask for a code."""
+        text = _skill_text()
+        self.assertIn("- `wake()` - Wake a cloud iPhone that is asleep or on its lock screen. "
+                      "No passcode is typed. Cloud iPhones only.", text)
+        section = " ".join(text.split("\n## Cloud iPhone\n", 1)[1].split("\n## ", 1)[0].split())
+        for rule in (
+                "**Asleep or locked.**", "the StandBy clock", "a black `screenshot()` with no text",
+                "`screenshot()` and `screen()` still work",          # looking is how it learns the phone is locked
+                "Call `wake()` and run the step again",
+                "It returns `{state, was, woke, through}`",
+                "Getting past StandBy leaves the phone on its Home Screen",
+                "set up with no passcode: never ask the user for one, and nothing here types one",
+                "a passcode has been set on it; tell the user",
+                "Check `supports('device.wake')` first",
+                "| `device.wake` | | `{state, was, woke, through}`; `state` is `'ready'` when the phone takes input."):
+            self.assertIn(rule, section)
+        # The sentence the skill quotes is the one the client raises.
+        from phone_harness.remote import LOCKED
+        quoted = "the cloud iPhone is locked or asleep. Call wake()"
+        self.assertTrue(LOCKED.startswith(quoted + " "), LOCKED)
+        self.assertIn(f"`{quoted} ...`", section)
+
+    def test_the_api_and_install_guides_say_the_same(self):
+        root = Path(__file__).resolve().parents[1]
+        api = " ".join((root / "setup" / "api.md").read_text().split())
+        install = " ".join((root / "install.md").read_text().split())
+        for rule in ('{"op":"device.wake","kw":{}}', '{"op":"url.open","kw":{"url":"https://example.com"}}',
+                     "answer 409 (`The iPhone is locked. ...`)",
+                     '`session.state` answers `"locked"` or `"standby"`', "Send `device.wake` and repeat the op",
+                     "It answers `{state, was, woke, through}`",
+                     "set up with no passcode", "an https link only, of at most 4096 characters",
+                     "`$API/sessions/SID/op` with the API key", "answers a locked phone with 502 and no code"):
+            self.assertIn(rule, api)
+        self.assertIn("`wake()` wakes it and the step can run again", install)
+        self.assertIn("set up with no passcode", install)
+
     def test_screenshot_prints_the_path_it_returns(self):
         import contextlib
 

@@ -24,6 +24,17 @@ from .transport import Backend, Unsupported
 
 USER_AGENT = "phone-harness-cli"
 
+# The host refuses, with 409, to touch an iPhone that shows its lock screen or
+# StandBy. Its own sentence says to unlock it on the phone, which nobody
+# driving a cloud phone can do. Where the host can wake the phone, the caller
+# is told that instead. The host marks the refusal with a code, but the
+# gateway in front of the control URL passes on only the sentence, so the
+# phone is asked what state it is in (see Remote._locked).
+LOCKED_CODE = "locked"
+WAKEABLE = ("locked", "standby")        # the states `session.state` gives such a phone
+LOCKED = ("the cloud iPhone is locked or asleep. Call wake() and run this step again. It has no passcode, "
+          "so there is nothing to type and nothing to ask the user for")
+
 
 def _cloud_phone_error():
     from .cloud import CloudPhoneError
@@ -124,12 +135,43 @@ class Remote(Backend):
             # "CloudPhoneError: session … expired"). Raising that string
             # as-is would print the type twice. A CloudPhoneError stays one,
             # so a dead cloud phone is not reported as a plain RuntimeError.
-            raise _host_error(message) from None
+            error = _host_error(message)
+            error.status, error.code = e.code, err.get("code")     # for _locked
+            raise error from None
         except urllib.error.URLError as e:
             raise RuntimeError(f"could not reach the cloud phone: {e.reason}") from None
 
     def _op(self, op, timeout=60, **kw):
-        return self._call("POST", "/op", {"op": op, "kw": kw}, timeout=timeout)["result"]
+        try:
+            return self._call("POST", "/op", {"op": op, "kw": kw}, timeout=timeout)["result"]
+        except RuntimeError as error:
+            if self._locked(op, error):
+                raise RuntimeError(LOCKED) from None
+            raise
+
+    def _locked(self, op, error):
+        """Was `op` refused because the phone shows its lock screen or StandBy,
+        on a host that can wake it?
+
+        The host says so with `code: locked`. That code reaches a client of
+        the host itself; the gateway in front of the control URL passes on the
+        sentence alone. So a 409 with no code is settled by asking the phone
+        its state, once: one more op, and only after a refusal. Only the list
+        of ops already read is consulted, and a host that cannot wake a phone
+        is asked nothing, so its own sentence stands.
+        """
+        ops = self._ops or ()
+        if getattr(error, "status", None) != 409 or "device.wake" not in ops:
+            return False
+        if getattr(error, "code", None) == LOCKED_CODE:
+            return True
+        if op in ("session.state", "device.wake") or "session.state" not in ops:
+            return False
+        try:
+            state = self._call("POST", "/op", {"op": "session.state", "kw": {}}, timeout=30)["result"]
+        except (RuntimeError, OSError, ValueError, KeyError, TypeError):
+            return False                    # the refusal already in hand is the one to report
+        return state in WAKEABLE
 
     # --- capabilities -------------------------------------------------------
 

@@ -51,6 +51,16 @@ nothing in common — so the shared layer is this vocabulary instead.
         inventory; Android has no Spotlight. A fake Back that guesses at an
         edge swipe returns a result the caller cannot tell from a real one.
 
+    device.wake                         -> {state, was, woke, through}
+
+        Turns the screen on and gets past the lock screen and StandBy.
+        `state` is what the phone is left in, 'ready' when it takes input;
+        `was` is what it was found in; `woke` is False when nothing had to
+        be pressed. It never enters a passcode: a cloud iPhone is set up
+        without one, and one that has one ends 'locked'. Unsupported where
+        the harness has no such control, and a phone on the desk is one: its
+        owner unlocks it.
+
     session.state                       -> backend-defined string, 'ready' when usable
     session.require                     -> bounds, or raise telling the USER what to do
     session.refocus                     -> None    (a no-op where nothing needs focus)
@@ -96,6 +106,7 @@ OP_NAMES = (
     "input.keys", "input.text",
     "nav.home", "nav.back", "nav.recents",
     "apps.launch", "apps.current", "apps.list",
+    "device.wake",
     "session.state", "session.require", "session.refocus", "session.detail",
     "focus.probe", "focus.diff",
     "url.open",

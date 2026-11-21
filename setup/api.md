@@ -32,7 +32,27 @@ curl -s -H "$C" -H 'Content-Type: application/json' \
   -d '{"op":"input.tap","kw":{"x":375,"y":667}}' $CONTROL_URL/op  # tap a point
 curl -s -H "$C" -H 'Content-Type: application/json' \
   -d '{"op":"nav.home","kw":{}}' $CONTROL_URL/op      # Home Screen
+curl -s -H "$C" -H 'Content-Type: application/json' \
+  -d '{"op":"device.wake","kw":{}}' $CONTROL_URL/op   # wake it; "state" is "ready" when it takes input
+curl -s -H "$C" -H 'Content-Type: application/json' \
+  -d '{"op":"url.open","kw":{"url":"https://example.com"}}' $CONTROL_URL/op  # open an https link in Safari
 ```
+
+A cloud iPhone that has been left alone goes to sleep: its screen is off, or
+shows the lock screen or the StandBy clock. On the lock screen and in StandBy,
+taps, typing, `apps.launch` and `url.open` answer 409 (`The iPhone is locked.
+...`), and `session.state` answers `"locked"` or `"standby"`. Send
+`device.wake` and repeat the op. It answers `{state, was, woke, through}`.
+These phones are set up with no passcode: there is none to send, and none to
+ask the user for.
+`url.open` takes an https link only, of at most 4096 characters, with no
+spaces; a link is often a credential, so do not print it.
+
+The same `{"op", "kw"}` body can be posted to `$API/sessions/SID/op` with the
+API key in place of the control token; the MCP server drives a phone that way.
+That route serves the screen, input, navigation and app ops, `device.wake` and
+`url.open`. It answers a locked phone with 502 and no code, so there send
+`device.wake` when an op fails and the screen shows the lock screen.
 
 Reserve an iPhone the account does not have yet, with a $20 per phone refundable
 deposit. Reservations are for iPhones only (with or without eSIM). Cloud
